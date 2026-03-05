@@ -370,37 +370,8 @@ app.post('/api/auth/complete', async (req, res) => {
 
         const stmt = db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)');
 
-        // 3a. Consolidate bot identity check
-        const normalizedStreamer = streamerName.toLowerCase().trim();
-        const normalizedBotSlug = BOT_KICK_SLUG.toLowerCase().trim();
-
-        // ONLY flag as bot if it maps perfectly to the bot's slug (geebot)
-        const isActuallyBot = normalizedStreamer === normalizedBotSlug ||
-            normalizedStreamer === 'geebot';
-
-        console.log(`[OAuth Debug] streamerName: "${streamerName}", BOT_KICK_SLUG: "${BOT_KICK_SLUG}", isActuallyBot: ${isActuallyBot}`);
-
-        if (isActuallyBot) {
-            console.log('[OAuth Server] Step 3: Detected BOT account — storing global bot token...');
-            stmt.run('__bot__', 'bot_user_token', accessToken);
-            if (refreshToken) stmt.run('__bot__', 'bot_refresh_token', refreshToken);
-            stmt.run('__bot__', 'bot_broadcaster_id', channelId.toString());
-
-            // Priority: userInfo.chatroom_id -> hardcoded fallback
-            const finalChatroomId = (userInfo.chatroom_id || '97444794').toString();
-            stmt.run('__bot__', 'chatroom_id', finalChatroomId);
-            console.log(`[OAuth Server] Bot chatroom_id set: ${finalChatroomId}`);
-
-            console.log('[OAuth Server] Bot account linked successfully! GeeBot can now send messages.');
-
-            // Also instantly subscribe to bot's own chat
-            subscribeToKickChat(finalChatroomId, channelId.toString(), streamerName);
-
-            return res.json({ success: true, isBotAccount: true });
-        }
-
-        // 3b. Regular streamer linking their channel
-        console.log('[OAuth Server] Step 3: Saving streamer settings...');
+        // Regular streamer linking their channel
+        console.log('[OAuth Server] Save: Saving streamer settings...');
         stmt.run(channelId.toString(), 'kick_user_token', accessToken);
         if (refreshToken) stmt.run(channelId.toString(), 'kick_refresh_token', refreshToken);
         stmt.run(channelId.toString(), 'streamer_name', streamerName);
@@ -431,28 +402,22 @@ app.post('/api/auth/complete', async (req, res) => {
 
 // Diagnostic endpoint — shows what tokens are stored and tests a chat send
 app.get('/api/debug', async (req, res) => {
-    const botToken = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
-        .get('__bot__', 'bot_user_token') as { value: string } | undefined;
-    const botChannelId = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
-        .get('__bot__', 'bot_broadcaster_id') as { value: string } | undefined;
-    const linkedChannels = db.prepare("SELECT channel_id, key, value FROM settings WHERE channel_id != '__bot__' AND key = 'streamer_name'")
+    const linkedChannels = db.prepare("SELECT channel_id, key, value FROM settings WHERE key = 'streamer_name'")
         .all() as { channel_id: string, key: string, value: string }[];
 
-    // Attempt a test send if bot token + broadcaster id are present
-    let chatTestResult = 'skipped — no bot token stored yet';
-    if (botToken?.value && botChannelId?.value) {
+    // Attempt a test send if we have at least one channel linked
+    let chatTestResult = 'skipped — no channels linked';
+    if (linkedChannels.length > 0) {
+        const testChannel = linkedChannels[0];
         try {
-            await sendChatMessageWithRetry(botChannelId.value, '[GeeBot] 🟢 Diagnostic test message.');
-            chatTestResult = 'SUCCESS';
+            await sendChatMessageWithRetry(testChannel.channel_id, '[GeeBot] 🟢 Diagnostic test message.');
+            chatTestResult = `SUCCESS sent to ${testChannel.value}`;
         } catch (err: any) {
-            chatTestResult = `FAILED: ${err.message}`;
+            chatTestResult = `FAILED on ${testChannel.value}: ${err.message}`;
         }
     }
 
     res.json({
-        botTokenStored: !!botToken?.value,
-        botTokenPrefix: botToken?.value ? botToken.value.substring(0, 10) + '...' : null,
-        botBroadcasterId: botChannelId?.value || null,
         linkedStreamers: linkedChannels.map(r => ({ channelId: r.channel_id, name: r.value })),
         chatTestResult
     });
@@ -544,8 +509,3 @@ httpServer.listen(PORT, () => {
     console.log(`GeeBot Backend is running on port ${PORT}`);
     console.log(`WebSocket Server listening on port ${PORT}`);
 });
-
-function channel_id_matches_bot(channelId: string): boolean {
-    const botId = db.prepare("SELECT value FROM settings WHERE channel_id = '__bot__' AND key = 'bot_broadcaster_id'").get() as { value: string } | undefined;
-    return botId?.value === channelId;
-}
