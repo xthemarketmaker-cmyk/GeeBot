@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import db from './db';
 
 dotenv.config();
 
@@ -8,38 +9,51 @@ const openai = new OpenAI({
     baseURL: 'https://api.x.ai/v1' // xAI (Grok) API compatibility layer
 });
 
-/**
- * Generates an AI response using the Grok API.
- * 
- * @param message - The user's current message
- * @param context - Recent chat history (formatted as a string)
- * @param systemPrompt - The bot's personality and instructions
- */
-export async function generateChatResponse(message: string, context: string, systemPrompt: string): Promise<string> {
+const SYSTEM_PROMPT = `You are GeeBot, the official and highly intelligent AI chat bot for this Kick channel.
+You help moderate the chat, answer questions, and keep the stream entertaining.
+Keep your responses concise, professional yet fun, and under 200 characters.`;
+
+export async function generateChatResponse(username: string, message: string): Promise<string> {
     try {
-        if (!process.env.GROK_API_KEY) {
-            return `[AI Offline] API Key missing.`;
+        if (!process.env.GROK_API_KEY || process.env.GROK_API_KEY === 'your_grok_api_key_here') {
+            return `[GeeBot AI Offline] Hello @${username}! The streamer hasn't configured my Grok AI "brain" yet!`;
         }
 
-        console.log(`[Grok AI] Generating response...`);
+        // Fetch custom personality from settings
+        const settingsStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
+        const customPersonality = settingsStmt.get('ai_personality') as { value: string } | undefined;
+        const systemPrompt = customPersonality?.value || SYSTEM_PROMPT;
+
+        // Fetch recent context for the AI from the database.
+        const recentMessagesStmt = db.prepare('SELECT username, message FROM chat_history ORDER BY id DESC LIMIT 10');
+        const recentMessages = recentMessagesStmt.all() as { username: string, message: string }[];
+
+        // Format history for OpenAI
+        const contextMessages: any[] = recentMessages.reverse().map(msg => ({
+            role: 'user', // We treat all chat messages as user inputs context
+            content: `${msg.username}: ${msg.message}`
+        }));
+
+        console.log(`[Grok AI] Requesting response for ${username}...`);
+        console.log(`[Grok AI] Context messges: ${contextMessages.length}`);
 
         const response = await openai.chat.completions.create({
-            model: 'grok-beta',
+            model: 'grok-beta', // Using grok-beta as a more standard/reliable alias
             messages: [
                 { role: 'system', content: systemPrompt },
-                { role: 'system', content: `Conversation Context:\n${context}` },
-                { role: 'user', content: message }
+                ...contextMessages,
+                { role: 'user', content: `${username} explicitly asks: ${message}` }
             ],
-            max_tokens: 280, // Twitter/Kick style concise replies
+            max_tokens: 200, // Slightly more tokens for better replies
             temperature: 0.7
         });
 
-        const reply = response.choices[0]?.message?.content || 'Beep boop, brain glitch.';
-        console.log(`[Grok AI] Response: ${reply.substring(0, 50)}...`);
-        return reply;
+        console.log(`[Grok AI] Success: ${response.choices[0]?.message?.content?.substring(0, 30)}...`);
+
+        return response.choices[0]?.message?.content || 'Beep boop, my brain had a slight glitch.';
 
     } catch (error) {
         console.error('Error in AI Chat Module:', error);
-        return `Oops, my circuits are a bit fried right now.`;
+        return `@${username} Oops, my circuits are a bit fried right now.`;
     }
 }

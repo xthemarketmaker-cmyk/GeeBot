@@ -87,19 +87,6 @@ export const initDb = () => {
         )
     `);
 
-    // 5. Timers - for periodic messages
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS timers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id TEXT,
-            name TEXT,
-            message TEXT,
-            interval_minutes INTEGER,
-            last_run DATETIME DEFAULT CURRENT_TIMESTAMP,
-            is_enabled BOOLEAN DEFAULT 1
-        )
-    `);
-
     console.log('Database initialized successfully.');
 };
 
