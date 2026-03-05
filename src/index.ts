@@ -71,6 +71,24 @@ app.use(express.static(path.join(__dirname, '..', 'public'))); // Serve dashboar
 
 const PORT = process.env.PORT || 3000;
 
+// The Kick slug of the bot account itself (e.g. kick.com/gee-bot).
+// When this account does the OAuth flow, we store its token as the global bot token.
+const BOT_KICK_SLUG = (process.env.BOT_KICK_SLUG || 'gee-bot').toLowerCase();
+
+/**
+ * Retrieves the best available token for sending chat messages.
+ * Priority: (1) bot account's own User Token, (2) the linked channel's streamer token.
+ */
+function getSendToken(channelId: string): string | undefined {
+    const botTokenRow = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
+        .get('__bot__', 'bot_user_token') as { value: string } | undefined;
+    if (botTokenRow?.value) return botTokenRow.value;
+
+    const channelTokenRow = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
+        .get(channelId, 'kick_user_token') as { value: string } | undefined;
+    return channelTokenRow?.value;
+}
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
     console.log(`New client connected: ${socket.id}`);
@@ -177,29 +195,72 @@ app.post('/api/auth/complete', async (req, res) => {
         const accessToken = tokenResponse.access_token;
         console.log('[OAuth Server] Step 1 Success: Token acquired.');
 
-        // 2. Identify the Streamer via the token
+        // 2. Identify the user via the token
         console.log('[OAuth Server] Step 2: Fetching user info...');
         const userInfo = await kickApi.getAuthenticatedUser(accessToken);
         const channelId = userInfo.channel_id;
         const streamerName = userInfo.username;
-        console.log(`[OAuth Server] Step 2 Success: Linked streamer ${streamerName} (${channelId})`);
+        console.log(`[OAuth Server] Step 2 Success: Linked user ${streamerName} (channel_id: ${channelId})`);
 
-        // 3. Store the token in the database (scoped per channel)
-        console.log('[OAuth Server] Step 3: Saving settings...');
         const stmt = db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)');
+
+        // 3a. If the bot account (gee-bot) itself is doing OAuth, store as the global bot token
+        if (streamerName.toLowerCase() === BOT_KICK_SLUG) {
+            console.log('[OAuth Server] Step 3: Detected BOT account — storing global bot token...');
+            stmt.run('__bot__', 'bot_user_token', accessToken);
+            stmt.run('__bot__', 'bot_broadcaster_id', channelId.toString());
+            console.log('[OAuth Server] Bot account linked successfully! GeeBot can now send messages.');
+            return res.json({ success: true, isBotAccount: true });
+        }
+
+        // 3b. Regular streamer linking their channel
+        console.log('[OAuth Server] Step 3: Saving streamer settings...');
         stmt.run(channelId.toString(), 'kick_user_token', accessToken);
         stmt.run(channelId.toString(), 'streamer_name', streamerName);
 
-        // 4. Send a "HELLO" message to join the chat
+        // 4. Send welcome message — do NOT let this block or fail the auth flow
         console.log('[OAuth Server] Step 4: Sending join message...');
-        await kickApi.sendChatMessage(channelId.toString(), `[Gee_Bot] System Online! I have successfully connected to your channel, @${streamerName}. 🟢`);
-        console.log('[OAuth Server] Step 4 Success: Message sent.');
+        const sendToken = getSendToken(channelId.toString()) || accessToken;
+        kickApi.sendChatMessage(channelId.toString(), `[Gee_Bot] System Online! I have successfully connected to your channel, @${streamerName}. 🟢`, sendToken)
+            .then(() => console.log('[OAuth Server] Step 4 Success: Join message sent.'))
+            .catch((err: any) => console.warn(`[OAuth Server] Step 4 Warning: Chat message failed (${err.message}) — channel is still linked.`));
 
-        res.json({ success: true });
+        // Return success immediately — the channel IS linked even if the welcome message fails
+        res.json({ success: true, streamer: streamerName, channelId: channelId.toString() });
+
     } catch (err: any) {
         console.error('[OAuth Server] ERROR during finalization:', err.message);
         res.status(500).json({ success: false, error: err.message || 'Unknown server error' });
     }
+});
+
+// Diagnostic endpoint — shows what tokens are stored and tests a chat send
+app.get('/api/debug', async (req, res) => {
+    const botToken = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
+        .get('__bot__', 'bot_user_token') as { value: string } | undefined;
+    const botChannelId = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
+        .get('__bot__', 'bot_broadcaster_id') as { value: string } | undefined;
+    const linkedChannels = db.prepare("SELECT channel_id, key, value FROM settings WHERE channel_id != '__bot__' AND key = 'streamer_name'")
+        .all() as { channel_id: string, key: string, value: string }[];
+
+    // Attempt a test send if bot token + broadcaster id are present
+    let chatTestResult = 'skipped — no bot token stored yet';
+    if (botToken?.value && botChannelId?.value) {
+        try {
+            await kickApi.sendChatMessage(botChannelId.value, '[GeeBot] 🟢 Diagnostic test message.', botToken.value);
+            chatTestResult = 'SUCCESS';
+        } catch (err: any) {
+            chatTestResult = `FAILED: ${err.message}`;
+        }
+    }
+
+    res.json({
+        botTokenStored: !!botToken?.value,
+        botTokenPrefix: botToken?.value ? botToken.value.substring(0, 10) + '...' : null,
+        botBroadcasterId: botChannelId?.value || null,
+        linkedStreamers: linkedChannels.map(r => ({ channelId: r.channel_id, name: r.value })),
+        chatTestResult
+    });
 });
 
 // API Routes for Dashboard
@@ -238,35 +299,34 @@ app.post('/webhook/kick', async (req: any, res) => {
         // Return 200 OK immediately
         res.status(200).send('Webhook Received');
 
-        // Example Payload parsing (based on generic structure, will conform to actual Kick docs):
-        // We assume payload has an event type and data payload.
-        if (payload.event === 'ChatMessageSent' || payload.type === 'message') {
-            const sender = payload.data?.sender?.username || 'Unknown';
-            const content = payload.data?.content || '';
-            const senderId = payload.data?.sender?.id || '0';
-            const channelId = payload.data?.channel_id || payload.channel_id;
+        // Kick's official webhook event type for chat messages is 'chat.message.sent'
+        if (payload.event === 'chat.message.sent') {
+            const sender   = payload.data?.sender?.username || 'Unknown';
+            const content  = payload.data?.content || '';
+            const senderId = payload.data?.sender?.user_id?.toString() || '0';
+            // broadcaster.user_id is the numeric ID of the channel this message came from
+            const channelId = payload.data?.broadcaster?.user_id?.toString() || '';
 
-            // 1. Save to Chat History context
-            const insertChat = db.prepare('INSERT INTO chat_history (user_id, username, message) VALUES (?, ?, ?)');
-            insertChat.run(senderId, sender, content);
+            // 1. Save to Chat History for AI context
+            const insertChat = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
+            insertChat.run(channelId, senderId, sender, content);
 
-            // 2. Broadcast raw message to Frontend overlay via WebSockets!
+            // 2. Broadcast raw message to Frontend overlay via WebSockets
             io.emit('chatMessage', { sender, content });
 
-            // 3. AI Module Trigger
-            // If message mentions @GeeBot or starts with "GeeBot", respond
+            // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
             if (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot')) {
                 const aiResponse = await generateChatResponse(sender, content);
                 console.log(`[GeeBot AI Replying]: ${aiResponse}`);
 
-                // Use the Official Kick API to send response back to the chat room
                 try {
-                    await kickApi.sendChatMessage(channelId.toString(), aiResponse);
+                    const sendToken = getSendToken(channelId);
+                    await kickApi.sendChatMessage(channelId, aiResponse, sendToken);
                 } catch (err) {
                     console.error('Failed to send official chat response:', err);
                 }
 
-                io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse }); // Broadcast bot message to overlay too
+                io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse });
             }
         }
     } catch (error) {

@@ -159,14 +159,19 @@ export async function getChannelInfo(slug: string) {
 
 /**
  * Sends a message to a channel's chat room.
+ *
+ * @param broadcasterUserId - The numeric user ID of the channel to post in (broadcaster_user_id from Kick API)
+ * @param message - The message content to send
+ * @param userToken - A User Access Token with chat:write scope. Should be the bot account's own token.
+ *                    If omitted, falls back to the App Access Token (which will fail for chat — for debugging only).
  */
-export async function sendChatMessage(channelId: string, message: string) {
-    // We MUST use the App Access Token (Client Credentials flow) to send messages as the bot,
-    // NOT the user access token we got from the OAuth callback.
-    let token = await getAccessToken();
+export async function sendChatMessage(broadcasterUserId: string | number, message: string, userToken?: string) {
+    // The Kick API requires a User Access Token with chat:write scope to send messages.
+    // The App Access Token (Client Credentials) does NOT have permission to send chat messages.
+    // userToken should be the bot account's (gee-bot) own OAuth token.
+    const token = userToken || await getAccessToken();
 
-    // First attempt using standard Bearer authorization
-    let response = await fetch(`https://api.kick.com/public/v1/chat`, {
+    const response = await fetch('https://api.kick.com/public/v1/chat', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${token}`,
@@ -175,35 +180,14 @@ export async function sendChatMessage(channelId: string, message: string) {
         },
         body: JSON.stringify({
             content: message,
-            type: 'bot', // Standard for bot messages
-            channel_id: channelId
+            type: 'bot',
+            broadcaster_user_id: parseInt(broadcasterUserId.toString(), 10)
         })
     });
 
     if (!response.ok) {
-        // Fallback: Sometimes Kick API requires the token without "Bearer" for bots, 
-        // or a slightly different endpoint structure. If Bearer fails, we try a direct token injection.
-        console.warn(`[Kick API] Primary chat send failed (${response.status}). Trying fallback...`);
-        const fallbackResponse = await fetch(`https://api.kick.com/public/v1/chat`, {
-            method: 'POST',
-            headers: {
-                'Authorization': token, // No Bearer
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-                content: message,
-                type: 'bot',
-                channel_id: channelId
-            })
-        });
-
-        if (!fallbackResponse.ok) {
-            const errText = await fallbackResponse.text();
-            console.error(`[Kick API] Fatal chat send error:`, errText);
-            throw new Error(`Failed to send chat message: ${fallbackResponse.status} ${errText}`);
-        }
-        return await fallbackResponse.json();
+        const errText = await response.text();
+        throw new Error(`Failed to send chat message: ${response.status} ${errText}`);
     }
 
     return await response.json();
