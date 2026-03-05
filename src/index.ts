@@ -8,12 +8,49 @@ import { initDb } from './db';
 import db from './db';
 import { generateChatResponse } from './ai';
 import * as kickApi from './kick_api';
+import crypto from 'crypto';
 
 // Load environment variables
 dotenv.config();
 
-// Initialize Database
+// Initializing Database
 initDb();
+
+const KICK_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq/+l1WnlRrGSolDMA+A8
+6rAhMbQGmQ2SapVcGM3zq8ANXjnhDWocMqfWcTd95btDydITa10kDvHzw9WQOqp2
+MZI7ZyrfzJuz5nhTPCiJwTwnEtWft7nV14BYRDHvlfqPUaZ+1KR4OCaO/wWIk/rQ
+L/TjY0M70gse8rlBkbo2a8rKhu69RQTRsoaf4DVhDPEeSeI5jVrRDGAMGL3cGuyY
+6CLKGdjVEM78g3JfYOvDU/RvfqD7L89TZ3iN94jrmWdGz34JNlEI5hqK8dd7C5EF
+BEbZ5jgB8s8ReQV8H+MkuffjdAj3ajDDX3DOJMIut1lBrUVD1AaSrGCKHooWoL2e
+twIDAQAB
+-----END PUBLIC KEY-----`;
+
+/**
+ * Verifies the signature of a webhook request from Kick.com
+ */
+function verifyKickSignature(req: any): boolean {
+    const signature = req.headers['kick-event-signature'];
+    const messageId = req.headers['kick-event-message-id'];
+    const timestamp = req.headers['kick-event-message-timestamp'];
+    const rawBody = req.rawBody?.toString() || '';
+
+    if (!signature || !messageId || !timestamp) {
+        console.error('[Webhook] Missing security headers');
+        return false;
+    }
+
+    try {
+        const signData = `${messageId}.${timestamp}.${rawBody}`;
+        const verifier = crypto.createVerify('RSA-SHA256');
+        verifier.update(signData);
+
+        return verifier.verify(KICK_PUBLIC_KEY, signature, 'base64');
+    } catch (err) {
+        console.error('[Webhook] Signature verification error:', err);
+        return false;
+    }
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -25,7 +62,11 @@ const io = new Server(httpServer, {
 
 // Middleware
 app.use(cors());
-app.use(express.json()); // For parsing application/json webhooks
+app.use(express.json({
+    verify: (req: any, res, buf) => {
+        req.rawBody = buf;
+    }
+})); // For parsing application/json webhooks and capturing raw body for signature verification
 app.use(express.static(path.join(__dirname, '..', 'public'))); // Serve dashboard and overlays
 
 const PORT = process.env.PORT || 3000;
@@ -155,15 +196,18 @@ app.post('/api/settings', (req, res) => {
     res.json({ status: 'success' });
 });
 
-// Official Kick API Webhook Endpoint Placeholder
-app.post('/webhook/kick', async (req, res) => {
+app.post('/webhook/kick', async (req: any, res) => {
     try {
-        // TODO: Verify signature from Kick API header: x-kick-signature
+        // 1. Verify Signature
+        if (!verifyKickSignature(req)) {
+            console.warn('[Webhook] UNTRUSTED SOURCE: Signature verification failed.');
+            return res.status(401).send('Unauthorized');
+        }
+
         const payload = req.body;
+        console.log('Received SECURE Webhook from Kick:', payload);
 
-        console.log('Received Webhook from Kick:', payload);
-
-        // Return 200 OK immediately so Kick knows we received it
+        // Return 200 OK immediately
         res.status(200).send('Webhook Received');
 
         // Example Payload parsing (based on generic structure, will conform to actual Kick docs):
