@@ -10,6 +10,10 @@ import { generateChatResponse } from './ai';
 import * as kickApi from './kick_api';
 import crypto from 'crypto';
 import Pusher from 'pusher-js';
+import ws from 'ws';
+
+// Assign WebSocket for Node.js compatibility since pusher-js is a browser-first library
+(Pusher as any).Runtime.createWebSocket = (url: string) => new ws(url);
 
 // Load environment variables
 dotenv.config();
@@ -77,17 +81,56 @@ const PORT = process.env.PORT || 3000;
 const BOT_KICK_SLUG = (process.env.BOT_KICK_SLUG || 'gee-bot').toLowerCase();
 
 /**
- * Retrieves the best available token for sending chat messages.
+ * Sends a chat message, automatically handling token refresh if the current token is expired.
  * Priority: (1) bot account's own User Token, (2) the linked channel's streamer token.
  */
-function getSendToken(channelId: string): string | undefined {
-    const botTokenRow = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
-        .get('__bot__', 'bot_user_token') as { value: string } | undefined;
-    if (botTokenRow?.value) return botTokenRow.value;
+async function sendChatMessageWithRetry(channelId: string, message: string) {
+    const botTokenRow = db.prepare('SELECT key, value FROM settings WHERE channel_id = ? AND key IN ("bot_user_token", "bot_refresh_token")').all('__bot__') as any[];
+    const botTokens = botTokenRow.reduce((acc: any, row: any) => ({ ...acc, [row.key]: row.value }), {});
 
-    const channelTokenRow = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?')
-        .get(channelId, 'kick_user_token') as { value: string } | undefined;
-    return channelTokenRow?.value;
+    let tokenContext = '__bot__';
+    let token = botTokens.bot_user_token;
+    let refreshToken = botTokens.bot_refresh_token;
+
+    if (!token) {
+        const channelTokenRow = db.prepare('SELECT key, value FROM settings WHERE channel_id = ? AND key IN ("kick_user_token", "kick_refresh_token")').all(channelId) as any[];
+        const channelTokens = channelTokenRow.reduce((acc: any, row: any) => ({ ...acc, [row.key]: row.value }), {});
+        token = channelTokens.kick_user_token;
+        refreshToken = channelTokens.kick_refresh_token;
+        tokenContext = channelId;
+    }
+
+    if (!token) {
+        console.error(`[Chat] Cannot send message to ${channelId}: No access token found.`);
+        return;
+    }
+
+    try {
+        await kickApi.sendChatMessage(channelId, message, token);
+    } catch (err: any) {
+        if (err.message && err.message.includes('401') && refreshToken) {
+            console.log(`[Chat] Token expired for context ${tokenContext}. Attempting refresh...`);
+            try {
+                const refreshed = await kickApi.refreshUserToken(refreshToken);
+                const tokenKey = tokenContext === '__bot__' ? 'bot_user_token' : 'kick_user_token';
+                const refreshKey = tokenContext === '__bot__' ? 'bot_refresh_token' : 'kick_refresh_token';
+
+                db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)').run(tokenContext, tokenKey, refreshed.access_token);
+                if (refreshed.refresh_token) {
+                    db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)').run(tokenContext, refreshKey, refreshed.refresh_token);
+                }
+
+                await kickApi.sendChatMessage(channelId, message, refreshed.access_token);
+                console.log(`[Chat] Message sent successfully after token refresh.`);
+            } catch (refreshErr: any) {
+                console.error(`[Chat] Token refresh failed for ${tokenContext}: ${refreshErr.message}`);
+                throw refreshErr;
+            }
+        } else {
+            console.error('[Chat] Failed to send message:', err.message);
+            throw err;
+        }
+    }
 }
 
 // Socket.io connection handling
@@ -124,42 +167,90 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
         enabledTransports: ['ws', 'wss']
     });
 
+    pusher.connection.bind('state_change', (states: any) => {
+        console.log(`[Pusher Connection] @${streamerName} State: ${states.previous} -> ${states.current}`);
+    });
+
+    pusher.connection.bind('error', (err: any) => {
+        console.error(`[Pusher Connection] @${streamerName} ERROR:`, err);
+    });
+
+    // Monitor connection every 30 seconds
+    setInterval(() => {
+        console.log(`[Pusher Monitor] @${streamerName} is currently: ${pusher.connection.state}`);
+    }, 30000);
+
     // The channel name format for a Kick chatroom
-    const pusherChannelName = `chatrooms.${chatroomId}.v2`;
-    const channel = pusher.subscribe(pusherChannelName);
+    const channelName = `chatrooms.${chatroomId}.v2`;
+    console.log(`[Pusher] Subscribing to ${channelName} for streamer ${streamerName}`);
+    const channel = pusher.subscribe(channelName);
 
     // Bind to the specific event Kick uses for new messages
     channel.bind('App\\Events\\ChatMessageEvent', async (data: any) => {
-        const sender = data.sender?.username || 'Unknown';
+        console.log(`[Pusher Debug] Incoming event on ${channelName}:`, JSON.stringify(data).substring(0, 100));
+        const senderData = data.sender || {};
+        const sender = senderData.username || senderData.slug || 'Unknown';
         const content = data.content || '';
-        const senderId = data.sender?.id?.toString() || '0';
+        const senderId = (senderData.id || '0').toString();
+
+        console.log(`[Pusher Chat] RAW EVENT: @${streamerName} | ${sender}: ${content} (ID: ${senderId})`);
 
         // Ignore messages sent by our own bot to prevent loops
-        if (sender.toLowerCase() === BOT_KICK_SLUG) return;
+        const normalizedSender = sender.toLowerCase().replace(/_/g, '-');
+        const normalizedBot = BOT_KICK_SLUG.toLowerCase().replace(/_/g, '-');
 
-        console.log(`[Pusher Chat] @${streamerName} | ${sender}: ${content}`);
+        if (normalizedSender === normalizedBot || normalizedSender === 'gee-bot' || normalizedSender === 'geebot' || normalizedSender === 'gee_bot') {
+            console.log(`[Pusher] Ignoring self-message from ${sender}`);
+            return;
+        }
 
-        // 1. Save to Chat History
+        // --- 1. Save to Chat History ---
         const insertChat = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
         insertChat.run(channelId, senderId, sender, content);
 
-        // 2. Broadcast raw message to Frontend overlay via WebSockets
+        // --- 2. Broadcast to Dashboard/Overlay ---
         io.emit('chatMessage', { sender, content });
 
-        // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
-        if (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot')) {
-            const aiResponse = await generateChatResponse(sender, content);
-            console.log(`[GeeBot AI Replying]: ${aiResponse}`);
+        // --- 3. AI Trigger Logic ---
+        const settingsRows = db.prepare('SELECT key, value FROM settings WHERE channel_id = ?').all(channelId) as any[];
+        const channelSettings = settingsRows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {} as any);
 
+        const probability = channelSettings.ai_probability || 'mentions';
+        const personality = channelSettings.ai_personality || "You are GeeBot, the official and highly intelligent AI chat bot for this Kick channel. You help moderate the chat, answer questions, and keep the stream entertaining.";
+
+        const lowerContent = content.toLowerCase();
+        const botMentions = ['@geebot', '@gee_bot', 'geebot', 'gee_bot'];
+        const isMentioned = botMentions.some(m => lowerContent.includes(m));
+
+        let shouldRespond = false;
+        if (probability === 'everywhere') {
+            shouldRespond = true;
+        } else if (probability === 'random') {
+            shouldRespond = Math.random() < 0.2 || isMentioned;
+        } else {
+            // Default: 'mentions'
+            shouldRespond = isMentioned;
+        }
+
+        if (shouldRespond) {
+            console.log(`[AI] Generating response for @${streamerName} (Trigger: ${probability}, Mentioned: ${isMentioned})...`);
             try {
-                const sendToken = getSendToken(channelId);
-                await kickApi.sendChatMessage(channelId, aiResponse, sendToken);
-            } catch (err) {
-                console.error('Failed to send official chat response:', err);
-            }
+                // Get recent context
+                const history = db.prepare('SELECT username, message FROM chat_history WHERE channel_id = ? ORDER BY id DESC LIMIT 10').all(channelId) as any[];
+                const context = history.reverse().map(h => `${h.username}: ${h.message}`).join('\n');
 
-            // Also emit the bot's response to the overlay
-            io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse });
+                const aiReply = await generateChatResponse(content, context, personality);
+                console.log(`[AI] Reply generated: "${aiReply.substring(0, 50)}..."`);
+
+                // Send to Kick
+                await sendChatMessageWithRetry(channelId, aiReply);
+                console.log(`[AI] Response sent to @${streamerName}`);
+
+                // Also emit the bot's response to the overlay
+                io.emit('chatMessage', { sender: 'Gee_Bot', content: aiReply });
+            } catch (aiErr) {
+                console.error('[AI Error]', aiErr);
+            }
         }
     });
 
@@ -266,6 +357,7 @@ app.post('/api/auth/complete', async (req, res) => {
         console.log('[OAuth Server] Step 1: Exchanging code...');
         const tokenResponse = await kickApi.exchangeCodeForToken(code, verifier);
         const accessToken = tokenResponse.access_token;
+        const refreshToken = tokenResponse.refresh_token;
         console.log('[OAuth Server] Step 1 Success: Token acquired.');
 
         // 2. Identify the user via the token
@@ -277,18 +369,40 @@ app.post('/api/auth/complete', async (req, res) => {
 
         const stmt = db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)');
 
-        // 3a. If the bot account (gee-bot) itself is doing OAuth, store as the global bot token
-        if (streamerName.toLowerCase() === BOT_KICK_SLUG) {
+        // 3a. Consolidate bot identity check
+        const normalizedStreamer = streamerName.toLowerCase().trim();
+        const normalizedBotSlug = BOT_KICK_SLUG.toLowerCase().trim();
+
+        const isActuallyBot = normalizedStreamer === normalizedBotSlug ||
+            normalizedStreamer === 'gee_bot' ||
+            normalizedStreamer === 'gee-bot' ||
+            channelId.toString() === '98951740';
+
+        console.log(`[OAuth Debug] streamerName: "${streamerName}", BOT_KICK_SLUG: "${BOT_KICK_SLUG}", isActuallyBot: ${isActuallyBot}`);
+
+        if (isActuallyBot) {
             console.log('[OAuth Server] Step 3: Detected BOT account — storing global bot token...');
             stmt.run('__bot__', 'bot_user_token', accessToken);
+            if (refreshToken) stmt.run('__bot__', 'bot_refresh_token', refreshToken);
             stmt.run('__bot__', 'bot_broadcaster_id', channelId.toString());
+
+            // Priority: userInfo.chatroom_id -> hardcoded fallback
+            const finalChatroomId = (userInfo.chatroom_id || '97444794').toString();
+            stmt.run('__bot__', 'chatroom_id', finalChatroomId);
+            console.log(`[OAuth Server] Bot chatroom_id set: ${finalChatroomId}`);
+
             console.log('[OAuth Server] Bot account linked successfully! GeeBot can now send messages.');
+
+            // Also instantly subscribe to bot's own chat
+            subscribeToKickChat(finalChatroomId, channelId.toString(), streamerName);
+
             return res.json({ success: true, isBotAccount: true });
         }
 
         // 3b. Regular streamer linking their channel
         console.log('[OAuth Server] Step 3: Saving streamer settings...');
         stmt.run(channelId.toString(), 'kick_user_token', accessToken);
+        if (refreshToken) stmt.run(channelId.toString(), 'kick_refresh_token', refreshToken);
         stmt.run(channelId.toString(), 'streamer_name', streamerName);
 
         // Save the chatroom_id if we got it, so we can reconnect Pusher on server restart
@@ -302,8 +416,7 @@ app.post('/api/auth/complete', async (req, res) => {
 
         // 4. Send welcome message — do NOT let this block or fail the auth flow
         console.log('[OAuth Server] Step 4: Sending join message...');
-        const sendToken = getSendToken(channelId.toString()) || accessToken;
-        kickApi.sendChatMessage(channelId.toString(), `[Gee_Bot] System Online! I have successfully connected to your channel, @${streamerName}. 🟢`, sendToken)
+        sendChatMessageWithRetry(channelId.toString(), `[Gee_Bot] System Online! I have successfully connected to your channel, @${streamerName}. 🟢`)
             .then(() => console.log('[OAuth Server] Step 4 Success: Join message sent.'))
             .catch((err: any) => console.warn(`[OAuth Server] Step 4 Warning: Chat message failed (${err.message}) — channel is still linked.`));
 
@@ -329,7 +442,7 @@ app.get('/api/debug', async (req, res) => {
     let chatTestResult = 'skipped — no bot token stored yet';
     if (botToken?.value && botChannelId?.value) {
         try {
-            await kickApi.sendChatMessage(botChannelId.value, '[GeeBot] 🟢 Diagnostic test message.', botToken.value);
+            await sendChatMessageWithRetry(botChannelId.value, '[GeeBot] 🟢 Diagnostic test message.');
             chatTestResult = 'SUCCESS';
         } catch (err: any) {
             chatTestResult = `FAILED: ${err.message}`;
@@ -345,88 +458,94 @@ app.get('/api/debug', async (req, res) => {
     });
 });
 
-// API Routes for Dashboard
+// 5. Settings API
 app.get('/api/settings', (req, res) => {
-    const rows = db.prepare('SELECT * FROM settings').all() as { key: string, value: string }[];
-    const settingsMap = rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
-    res.json(settingsMap);
+    // For now, get the first available channel or a specific one if provided
+    const channelId = req.query.channel_id?.toString() || '__bot__';
+    const settings = db.prepare('SELECT key, value FROM settings WHERE channel_id = ?').all(channelId);
+    const settingsObj = settings.reduce((acc: any, s: any) => {
+        acc[s.key] = s.value;
+        return acc;
+    }, {});
+    res.json(settingsObj);
 });
 
 app.post('/api/settings', (req, res) => {
-    const settings = req.body;
-    const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    const { channel_id, ...settings } = req.body;
+    const targetChannel = channel_id || '__bot__';
 
-    // Use a transaction for reliability
+    const upsert = db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)');
+
     const transaction = db.transaction((data) => {
         for (const [key, value] of Object.entries(data)) {
-            upsert.run(key, value);
+            upsert.run(targetChannel, key, value);
         }
     });
 
     transaction(settings);
-    res.json({ status: 'success' });
+    res.json({ success: true });
 });
 
+app.get('/api/channels/linked', (req, res) => {
+    const channels = db.prepare("SELECT channel_id, value as channel_name FROM settings WHERE key = 'streamer_name'").all();
+    res.json(channels);
+});
+
+// Note: We use Pusher WebSockets instead of webhooks for chat events 
+// because Kick's official webhooks are currently unreliable.
 app.post('/webhook/kick', async (req: any, res) => {
-    try {
-        // 1. Verify Signature
-        if (!verifyKickSignature(req)) {
-            console.warn('[Webhook] UNTRUSTED SOURCE: Signature verification failed.');
-            return res.status(401).send('Unauthorized');
-        }
+    res.status(200).send('Webhook Received (Ignored - Using Pusher)');
+});
 
-        const payload = req.body;
-        console.log('Received SECURE Webhook from Kick:', payload);
+// --- 6. BACKGROUND TIMER SYSTEM ---
+function startTimerLoop() {
+    console.log('[Timer System] Starting background loop...');
+    setInterval(async () => {
+        const now = new Date();
+        const activeTimers = db.prepare('SELECT * FROM timers WHERE is_enabled = 1').all() as any[];
 
-        // Return 200 OK immediately
-        res.status(200).send('Webhook Received');
+        for (const timer of activeTimers) {
+            const lastRun = new Date(timer.last_run);
+            const diffMs = now.getTime() - lastRun.getTime();
+            const diffMin = diffMs / (1000 * 60);
 
-        // Kick's official webhook event type for chat messages is 'chat.message.sent'
-        if (payload.event === 'chat.message.sent') {
-            const sender = payload.data?.sender?.username || 'Unknown';
-            const content = payload.data?.content || '';
-            const senderId = payload.data?.sender?.user_id?.toString() || '0';
-            // broadcaster.user_id is the numeric ID of the channel this message came from
-            const channelId = payload.data?.broadcaster?.user_id?.toString() || '';
-
-            // 1. Save to Chat History for AI context
-            const insertChat = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
-            insertChat.run(channelId, senderId, sender, content);
-
-            // 2. Broadcast raw message to Frontend overlay via WebSockets
-            io.emit('chatMessage', { sender, content });
-
-            // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
-            if (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot')) {
-                const aiResponse = await generateChatResponse(sender, content);
-                console.log(`[GeeBot AI Replying]: ${aiResponse}`);
-
+            if (diffMin >= timer.interval_minutes) {
+                console.log(`[Timer System] Executing timer "${timer.name}" for channel ${timer.channel_id}`);
                 try {
-                    const sendToken = getSendToken(channelId);
-                    await kickApi.sendChatMessage(channelId, aiResponse, sendToken);
+                    await sendChatMessageWithRetry(timer.channel_id, timer.message);
+                    db.prepare('UPDATE timers SET last_run = CURRENT_TIMESTAMP WHERE id = ?').run(timer.id);
+                    console.log(`[Timer System] Message sent: ${timer.message.substring(0, 30)}...`);
                 } catch (err) {
-                    console.error('Failed to send official chat response:', err);
+                    console.error(`[Timer System] Failed for "${timer.name}":`, err);
                 }
-
-                io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse });
             }
         }
-    } catch (error) {
-        console.error('Webhook processing error:', error);
-    }
-});
+    }, 60000); // Check every minute
+}
 
-// Start the server
+// Start existing timers
+startTimerLoop();
+
+// Subscribe to existing channels on startup
+const subscribeToExisting = () => {
+    const channels = db.prepare("SELECT channel_id, value as chatroom_id FROM settings WHERE key = 'chatroom_id'").all() as any[];
+    console.log(`[Startup] Found ${channels.length} channels to subscribe to.`);
+    channels.forEach(ch => {
+        // Find channel_name
+        const nameRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'channel_name'").get(ch.channel_id) as any;
+        const streamerName = nameRow?.value || 'Streamer';
+        subscribeToKickChat(ch.chatroom_id, ch.channel_id, streamerName);
+    });
+};
+subscribeToExisting();
+
+// Start Server
 httpServer.listen(PORT, () => {
-    console.log(`GeeBot Core Service running on port ${PORT}`);
+    console.log(`GeeBot Backend is running on port ${PORT}`);
     console.log(`WebSocket Server listening on port ${PORT}`);
-
-    // Auto-reconnect Pusher to all previously linked channels
-    const linkedChannels = db.prepare("SELECT channel_id, value FROM settings WHERE key = 'streamer_name' AND channel_id != '__bot__'").all() as { channel_id: string, value: string }[];
-    for (const channel of linkedChannels) {
-        const chatroomIdRow = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?').get(channel.channel_id, 'chatroom_id') as { value: string } | undefined;
-        if (chatroomIdRow?.value) {
-            subscribeToKickChat(chatroomIdRow.value, channel.channel_id, channel.value);
-        }
-    }
 });
+
+function channel_id_matches_bot(channelId: string): boolean {
+    const botId = db.prepare("SELECT value FROM settings WHERE channel_id = '__bot__' AND key = 'bot_broadcaster_id'").get() as { value: string } | undefined;
+    return botId?.value === channelId;
+}

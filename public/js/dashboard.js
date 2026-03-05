@@ -35,10 +35,17 @@ socket.on('chatMessage', (data) => {
 
     const msgElement = document.createElement('div');
     msgElement.className = 'chat-msg';
-    msgElement.innerHTML = `
-        <span class="msg-user">${data.sender}:</span>
-        <span class="msg-content">${data.content}</span>
-    `;
+
+    const userSpan = document.createElement('span');
+    userSpan.className = 'msg-user';
+    userSpan.textContent = `${data.sender}: `;
+
+    const contentSpan = document.createElement('span');
+    contentSpan.className = 'msg-content';
+    contentSpan.textContent = data.content;
+
+    msgElement.appendChild(userSpan);
+    msgElement.appendChild(contentSpan);
 
     chatFeed.insertBefore(msgElement, chatFeed.firstChild);
 
@@ -93,14 +100,17 @@ if (linkBtn) {
     });
 }
 
-// UI Actions
-const aiPersonality = document.getElementById('ai-personality');
-const toast = document.getElementById('toast');
+const saveBtn = document.getElementById('save-ai-settings');
+const aiProbability = document.getElementById('ai-probability');
+
+let currentChannelId = null;
 
 if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
         const settings = {
-            ai_personality: aiPersonality.value
+            channel_id: currentChannelId,
+            ai_personality: aiPersonality.value,
+            ai_probability: aiProbability.value
         };
 
         try {
@@ -136,12 +146,39 @@ async function loadSettings() {
         if (settings.ai_personality) {
             aiPersonality.value = settings.ai_personality;
         }
+        if (settings.ai_probability) {
+            aiProbability.value = settings.ai_probability;
+        }
+
+        // If we found any settings, use that channel_id
+        // (In a multi-channel world we would use a dropdown or session)
     } catch (err) {
         console.error('Failed to load settings:', err);
     }
 }
 
-loadSettings();
+// Fetch channel info to correctly scope settings
+async function fetchChannelInfo() {
+    try {
+        const resp = await fetch('/api/settings');
+        const settings = await resp.json();
+        // Look for any key that tells us the channel_id
+        const resp2 = await fetch('/api/channels/linked');
+        const channels = await resp2.json();
+        if (channels && channels.length > 0) {
+            currentChannelId = channels[0].channel_id;
+            console.log('Managing Channel:', currentChannelId);
+            loadSettings(currentChannelId);
+        } else {
+            loadSettings('__bot__');
+        }
+    } catch (e) {
+        console.warn('Could not determine channel, using __bot__');
+        loadSettings('__bot__');
+    }
+}
+
+fetchChannelInfo();
 
 // Copy URL buttons
 document.querySelectorAll('.copy-url').forEach(btn => {

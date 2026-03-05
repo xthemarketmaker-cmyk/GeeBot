@@ -1,0 +1,29 @@
+{
+  "data": [
+    {
+      "broadcaster_user_id": 98951740,
+      "slug": "gee-bot",
+      "channel_description": "",
+      "banner_picture": "",
+      "stream": {
+        "url": "",
+        "key": "",
+        "is_live": false,
+        "is_mature": false,
+        "language": "",
+        "start_time": "0001-01-01T00:00:00Z",
+        "viewer_count": 0,
+        "thumbnail": ""
+      },
+      "stream_title": "",
+      "category": {
+        "id": 0,
+        "name": "",
+        "thumbnail": ""
+      },
+      "active_subscribers_count": 0,
+      "canceled_subscribers_count": 0
+    }
+  ],
+  "message": "OK"
+}

@@ -81,6 +81,30 @@ export async function exchangeCodeForToken(code: string, verifier: string) {
     return await response.json() as { access_token: string, refresh_token: string };
 }
 
+// Refresh an expired User Access Token
+export async function refreshUserToken(refreshToken: string) {
+    const clientId = process.env.KICK_API_CLIENT_ID;
+    const clientSecret = process.env.KICK_API_CLIENT_SECRET;
+
+    const response = await fetch('https://id.kick.com/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+            client_id: clientId!,
+            client_secret: clientSecret!,
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken
+        })
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Token refresh failed: ${response.status} ${errText}`);
+    }
+
+    return await response.json() as { access_token: string, refresh_token: string };
+}
+
 // Get information about the user who just authorized
 export async function getAuthenticatedUser(accessToken: string) {
     // Kick's API endpoints can be fluid. We will probe the known endpoints
