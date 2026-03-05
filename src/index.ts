@@ -469,7 +469,7 @@ app.post('/webhook/kick', async (req: any, res) => {
 });
 
 // Start the server
-httpServer.listen(PORT, () => {
+httpServer.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`GeeBot Core Service running on port ${PORT}`);
     console.log(`WebSocket Server listening on port ${PORT}`);
 
