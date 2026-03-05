@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeeBot Dashboard | Control Center</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;600;800&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="background-glow"></div>
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo">G</div>
+                <h1>Gee_Bot</h1>
+            </div>
+            <nav class="nav-links">
+                <a href="#overview" class="nav-item active" data-tab="overview">
+                    <span class="icon">📊</span> Overview
+                </a>
+                <a href="#ai-settings" class="nav-item" data-tab="ai-settings">
+                    <span class="icon">🧠</span> AI Brain
+                </a>
+                <a href="#points" class="nav-item" data-tab="points">
+                    <span class="icon">💰</span> Points System
+                </a>
+                <a href="#widgets" class="nav-item" data-tab="widgets">
+                    <span class="icon">🎨</span> Widgets & Overlays
+                </a>
+                <a href="#commands" class="nav-item" data-tab="commands">
+                    <span class="icon">⌨️</span> Custom Commands
+                </a>
+            </nav>
+            <div class="status-card">
+                <div class="status-indicator online"></div>
+                <div class="status-text">
+                    <p class="status-label">Bot Status</p>
+                    <p class="status-value">CONNECTED</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="content-header">
+                <div>
+                    <h2 id="current-tab-title">Overview</h2>
+                    <p class="subtitle">Welcome back, Streamer! Control your stream's interactivity here.</p>
+                </div>
+                <div class="user-profile">
+                    <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=GeeBot" alt="Broadcaster" class="avatar">
+                    <span>Broadcaster</span>
+                </div>
+            </header>
+
+            <!-- Overview Tab -->
+            <section id="overview-tab" class="tab-content active">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Channel Connectivity</h3>
+                        <div class="channel-status">
+                            <button class="btn btn-primary" id="link-channel-btn">Link Your Kick Channel</button>
+                            <p class="card-desc" style="margin-top: 10px;">Click to invite Gee_Bot to your stream.</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card">
+                            <h3>Active Listeners</h3>
+                            <p class="stat-number" id="active-chatters">42</p>
+                            <span class="stat-trend">Live Now</span>
+                        </div>
+                        <div class="stat-card">
+                            <h3>AI Responses Today</h3>
+                            <p class="stat-number" id="ai-replies">156</p>
+                        </div>
+                    </div>
+
+                    <div class="recent-events glass">
+                        <h3>Live Chat Stream</h3>
+                        <div id="chat-feed" class="event-list">
+                            <!-- Chat messages injected via JS -->
+                            <div class="event-item placeholder">Waiting for messages...</div>
+                        </div>
+                    </div>
+            </section>
+
+            <!-- AI Settings Tab -->
+            <section id="ai-settings-tab" class="tab-content">
+                <div class="settings-card glass">
+                    <h3>AI Brain Configuration</h3>
+                    <p class="card-desc">Personalize how Gee_Bot interacts with your viewers.</p>
+
+                    <div class="form-group">
+                        <label>Bot Personality / Instructions</label>
+                        <textarea id="ai-personality"
+                            placeholder="e.g. You are a funny, high-energy bot who loves making gaming puns...">You are GeeBot, the official and highly intelligent AI chat bot for this Kick channel. You help moderate the chat, answer questions, and keep the stream entertaining.</textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Creativity (Temperature)</label>
+                            <input type="range" min="0" max="100" value="70">
+                        </div>
+                        <div class="form-group">
+                            <label>AI Response Probability</label>
+                            <select id="ai-probability">
+                                <option value="mentions">Mentions Only (@GeeBot)</option>
+                                <option value="everywhere">Acknowledge Everything (Caution!)</option>
+                                <option value="random">Randomly Interject</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary" id="save-ai-settings">Deploy AI Brain Updates</button>
+                </div>
+            </section>
+
+            <!-- Widget Library Tab -->
+            <section id="widgets-tab" class="tab-content">
+                <div class="widget-grid">
+                    <div class="widget-card glass">
+                        <div class="widget-header">
+                            <div class="widget-icon">💬</div>
+                            <div class="switch-container">
+                                <input type="checkbox" id="chat-widget-toggle" checked>
+                                <label for="chat-widget-toggle" class="switch"></label>
+                            </div>
+                        </div>
+                        <h4>Dynamic Chat Overlay</h4>
+                        <p>Transparent, premium chat bubbles for your OBS stream.</p>
+                        <div class="widget-footer">
+                            <button class="btn btn-outline copy-url" data-url="/overlays/chat">Copy Overlay URL</button>
+                        </div>
+                    </div>
+
+                    <div class="widget-card glass disabled">
+                        <div class="widget-header">
+                            <div class="widget-icon">🎁</div>
+                            <div class="switch-container">
+                                <input type="checkbox" id="alerts-widget-toggle">
+                                <label for="alerts-widget-toggle" class="switch"></label>
+                            </div>
+                        </div>
+                        <h4>Custom Alerts</h4>
+                        <p>Follows, Subs, and Gifts with custom animations.</p>
+                        <div class="widget-footer">
+                            <button class="btn btn-outline" disabled>Coming Soon</button>
+                        </div>
+                    </div>
+
+                    <div class="widget-card glass">
+                        <div class="widget-header">
+                            <div class="widget-icon">❓</div>
+                            <div class="switch-container">
+                                <input type="checkbox" id="poll-widget-toggle" checked>
+                                <label for="poll-widget-toggle" class="switch"></label>
+                            </div>
+                        </div>
+                        <h4>Live Polling Card</h4>
+                        <p>Real-time polls that display results on stream instantly.</p>
+                        <div class="widget-footer">
+                            <button class="btn btn-outline copy-url" data-url="/overlays/polls">Copy Overlay
+                                URL</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">Saved Successfully!</div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/dashboard.js"></script>
+</body>
+
+</html>
