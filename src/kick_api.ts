@@ -52,13 +52,13 @@ export async function getAccessToken(): Promise<string> {
 }
 
 // Exchange Auth Code + PKCE Verifier for a User Access Token
-export async function exchangeCodeForToken(code: string, verifier: string) {
+export async function exchangeCodeForToken(code: string, verifier: string, dynamicRedirectUri?: string) {
     const clientId = process.env.KICK_API_CLIENT_ID;
     const clientSecret = process.env.KICK_API_CLIENT_SECRET;
 
     // Redirect URI must match the authorize request exactly.
-    // Use an environment variable for dynamic host (e.g., ngrok) or default to localhost.
-    const redirectUri = process.env.KICK_REDIRECT_URI || `http://localhost:3000/auth/kick/callback`;
+    // Use the dynamic origin passed from the frontend (Railway url), or fallback to localhost.
+    const redirectUri = dynamicRedirectUri || process.env.KICK_REDIRECT_URI || `http://localhost:3000/auth/kick/callback`;
 
     const response = await fetch('https://id.kick.com/oauth/token', {
         method: 'POST',

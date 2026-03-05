@@ -196,10 +196,10 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
         console.log(`[Pusher Chat] RAW EVENT: @${streamerName} | ${sender}: ${content} (ID: ${senderId})`);
 
         // Ignore messages sent by our own bot to prevent loops
-        const normalizedSender = sender.toLowerCase().replace(/_/g, '-');
-        const normalizedBot = BOT_KICK_SLUG.toLowerCase().replace(/_/g, '-');
+        const normalizedSender = sender.toLowerCase().trim();
+        const normalizedBot = BOT_KICK_SLUG.toLowerCase().trim();
 
-        if (normalizedSender === normalizedBot || normalizedSender === 'gee-bot' || normalizedSender === 'geebot' || normalizedSender === 'gee_bot') {
+        if (normalizedSender === normalizedBot || normalizedSender === 'geebot') {
             console.log(`[Pusher] Ignoring self-message from ${sender}`);
             return;
         }
@@ -219,7 +219,8 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
         const personality = channelSettings.ai_personality || "You are GeeBot, the official and highly intelligent AI chat bot for this Kick channel. You help moderate the chat, answer questions, and keep the stream entertaining.";
 
         const lowerContent = content.toLowerCase();
-        const botMentions = ['@geebot', '@gee_bot', 'geebot', 'gee_bot'];
+        // Trigger only on the bot's name, not the streamer's
+        const botMentions = ['@geebot', 'geebot'];
         const isMentioned = botMentions.some(m => lowerContent.includes(m));
 
         let shouldRespond = false;
@@ -315,7 +316,7 @@ app.get('/auth/kick/callback', async (req, res) => {
                         fetch('/api/auth/complete', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ code, verifier, state })
+                            body: JSON.stringify({ code, verifier, state, redirectUri: window.location.origin + '/auth/kick/callback' })
                         })
                         .then(r => r.json())
                         .then(data => {
@@ -349,13 +350,13 @@ app.get('/auth/kick/callback', async (req, res) => {
 
 // Endpoint to exchange code for token and join channel
 app.post('/api/auth/complete', async (req, res) => {
-    const { code, verifier } = req.body;
+    const { code, verifier, redirectUri } = req.body;
     console.log('[OAuth Server] Starting token exchange...');
 
     try {
         // 1. Exchange code for token
         console.log('[OAuth Server] Step 1: Exchanging code...');
-        const tokenResponse = await kickApi.exchangeCodeForToken(code, verifier);
+        const tokenResponse = await kickApi.exchangeCodeForToken(code, verifier, redirectUri);
         const accessToken = tokenResponse.access_token;
         const refreshToken = tokenResponse.refresh_token;
         console.log('[OAuth Server] Step 1 Success: Token acquired.');
@@ -373,10 +374,9 @@ app.post('/api/auth/complete', async (req, res) => {
         const normalizedStreamer = streamerName.toLowerCase().trim();
         const normalizedBotSlug = BOT_KICK_SLUG.toLowerCase().trim();
 
+        // ONLY flag as bot if it maps perfectly to the bot's slug (geebot)
         const isActuallyBot = normalizedStreamer === normalizedBotSlug ||
-            normalizedStreamer === 'gee_bot' ||
-            normalizedStreamer === 'gee-bot' ||
-            channelId.toString() === '98951740';
+            normalizedStreamer === 'geebot';
 
         console.log(`[OAuth Debug] streamerName: "${streamerName}", BOT_KICK_SLUG: "${BOT_KICK_SLUG}", isActuallyBot: ${isActuallyBot}`);
 
