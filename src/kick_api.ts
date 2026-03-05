@@ -109,7 +109,12 @@ export async function getAuthenticatedUser(accessToken: string) {
                 console.log(`[OAuth Search] SUCCESS on ${url}:`, JSON.stringify(data).substring(0, 300));
 
                 // Handle both wrapped { data: { id: ... } } and flat { id: ... } structures
-                const payload = data.data || data;
+                let payload = data.data || data;
+
+                // CRITICAL FIX: The /public/v1/users endpoint returns an array of users inside `data`!
+                if (Array.isArray(payload)) {
+                    payload = payload[0];
+                }
 
                 // Make sure we actually have an ID before declaring success
                 const id = payload?.id || payload?.user_id || payload?.sub;
@@ -118,7 +123,8 @@ export async function getAuthenticatedUser(accessToken: string) {
                     return {
                         user_id: id.toString(),
                         username: payload?.username || payload?.name || 'Unknown',
-                        channel_id: payload?.channel?.id || payload?.channel_id || id.toString()
+                        // Sometimes the API gives us `channel_id` directly, other times just the user ID which works too
+                        channel_id: payload?.channel_id || payload?.channel?.id || id.toString()
                     };
                 } else {
                     console.log(`[OAuth Search] Got 200 OK from ${url} but no user ID found in payload.`);
