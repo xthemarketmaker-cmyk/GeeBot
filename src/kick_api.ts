@@ -161,8 +161,12 @@ export async function getChannelInfo(slug: string) {
  * Sends a message to a channel's chat room.
  */
 export async function sendChatMessage(channelId: string, message: string) {
-    const token = await getAccessToken();
-    const response = await fetch(`https://api.kick.com/public/v1/chat`, {
+    // We MUST use the App Access Token (Client Credentials flow) to send messages as the bot,
+    // NOT the user access token we got from the OAuth callback.
+    let token = await getAccessToken();
+
+    // First attempt using standard Bearer authorization
+    let response = await fetch(`https://api.kick.com/public/v1/chat`, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${token}`,
@@ -177,7 +181,29 @@ export async function sendChatMessage(channelId: string, message: string) {
     });
 
     if (!response.ok) {
-        throw new Error(`Failed to send chat message: ${response.status} ${await response.text()}`);
+        // Fallback: Sometimes Kick API requires the token without "Bearer" for bots, 
+        // or a slightly different endpoint structure. If Bearer fails, we try a direct token injection.
+        console.warn(`[Kick API] Primary chat send failed (${response.status}). Trying fallback...`);
+        const fallbackResponse = await fetch(`https://api.kick.com/public/v1/chat`, {
+            method: 'POST',
+            headers: {
+                'Authorization': token, // No Bearer
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+                content: message,
+                type: 'bot',
+                channel_id: channelId
+            })
+        });
+
+        if (!fallbackResponse.ok) {
+            const errText = await fallbackResponse.text();
+            console.error(`[Kick API] Fatal chat send error:`, errText);
+            throw new Error(`Failed to send chat message: ${fallbackResponse.status} ${errText}`);
+        }
+        return await fallbackResponse.json();
     }
 
     return await response.json();
