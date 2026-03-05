@@ -91,10 +91,14 @@ app.get('/auth/kick/callback', async (req, res) => {
     res.send(`
         <html>
         <body style="background: #111; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh;">
-            <div id="status-container" style="text-align: center;">
-                <h2>Finalizing Connection...</h2>
-                <p>Please wait while we sync Gee_Bot with your channel.</p>
-                <div id="debug-info" style="margin-top: 20px; font-size: 0.8rem; color: #666; font-family: monospace;"></div>
+            <div id="status-container" style="text-align: center; max-width: 500px; padding: 20px; border: 1px solid #333; border-radius: 10px; background: #1a1a1a;">
+                <h2 id="main-status">Finalizing Connection...</h2>
+                <p id="sub-status">Please wait while we sync Gee_Bot with your channel.</p>
+                <div id="debug-info" style="margin-top: 20px; padding: 10px; font-size: 0.8rem; color: #888; font-family: monospace; text-align: left; background: #000; border-radius: 5px;">
+                    <div>• Code Detected: <span id="debug-code">Checking...</span></div>
+                    <div>• Verifier Detected: <span id="debug-verifier">Checking...</span></div>
+                    <div>• Server Handshake: <span id="debug-handshake">Waiting...</span></div>
+                </div>
             </div>
             <script>
                 const urlParams = new URLSearchParams(window.location.search);
@@ -102,16 +106,24 @@ app.get('/auth/kick/callback', async (req, res) => {
                 const state = urlParams.get('state');
                 const verifier = sessionStorage.getItem('kick_oauth_verifier');
                 
-                // Timeout after 20 seconds
+                document.getElementById('debug-code').textContent = code ? 'YES' : 'MISSING';
+                document.getElementById('debug-verifier').textContent = verifier ? 'YES' : 'MISSING';
+
+                // Timeout after 30 seconds
                 const timeout = setTimeout(() => {
-                    document.getElementById('status-container').innerHTML = '<h2>Hanging...</h2><p>The server is taking too long. Check your Railway logs for errors.</p>';
-                }, 20000);
+                    document.getElementById('main-status').textContent = 'Hanging...';
+                    document.getElementById('sub-status').textContent = 'The server is taking too long. Check your Railway logs for a "Step 1" message.';
+                    document.getElementById('debug-handshake').textContent = 'TIMEOUT';
+                }, 30000);
 
                 if (!code || !verifier) {
                     clearTimeout(timeout);
-                    document.getElementById('status-container').innerHTML = '<h2>Data Missing</h2><p>Please try linking again from the live URL.</p>';
+                    document.getElementById('main-status').textContent = 'Missing Handshake Data';
+                    document.getElementById('sub-status').textContent = 'The security token or authorization code is missing. Try clicking the link button again.';
                     return;
                 }
+
+                document.getElementById('debug-handshake').textContent = 'In Progress...';
 
                 fetch('/api/auth/complete', {
                     method: 'POST',
@@ -122,14 +134,19 @@ app.get('/auth/kick/callback', async (req, res) => {
                 .then(data => {
                     clearTimeout(timeout);
                     if (data.success) {
+                        document.getElementById('debug-handshake').textContent = 'SUCCESS';
                         window.location.href = '/?linked=true';
                     } else {
-                        document.getElementById('status-container').innerHTML = '<h2>Server Error</h2><p>' + data.error + '</p>';
+                        document.getElementById('debug-handshake').textContent = 'FAILED';
+                        document.getElementById('main-status').textContent = 'Server Error';
+                        document.getElementById('sub-status').textContent = data.error;
                     }
                 })
                 .catch(err => {
                     clearTimeout(timeout);
-                    document.getElementById('status-container').innerHTML = '<h2>Network Error</h2><p>' + err.message + '</p>';
+                    document.getElementById('debug-handshake').textContent = 'NETWORK ERROR';
+                    document.getElementById('main-status').textContent = 'Connection Error';
+                    document.getElementById('sub-status').textContent = 'Could not reach the backend. Error: ' + err.message;
                 });
             </script>
         </body>
