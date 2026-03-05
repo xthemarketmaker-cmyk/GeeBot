@@ -52,13 +52,13 @@ export async function getAccessToken(): Promise<string> {
 }
 
 // Exchange Auth Code + PKCE Verifier for a User Access Token
-export async function exchangeCodeForToken(code: string, verifier: string, dynamicRedirectUri?: string) {
+export async function exchangeCodeForToken(code: string, verifier: string) {
     const clientId = process.env.KICK_API_CLIENT_ID;
     const clientSecret = process.env.KICK_API_CLIENT_SECRET;
 
     // Redirect URI must match the authorize request exactly.
-    // Use the dynamic origin passed from the frontend (Railway url), or fallback to localhost.
-    const redirectUri = dynamicRedirectUri || process.env.KICK_REDIRECT_URI || `http://localhost:3000/auth/kick/callback`;
+    // Use an environment variable for dynamic host (e.g., ngrok) or default to localhost.
+    const redirectUri = process.env.KICK_REDIRECT_URI || `http://localhost:3000/auth/kick/callback`;
 
     const response = await fetch('https://id.kick.com/oauth/token', {
         method: 'POST',
@@ -196,15 +196,6 @@ export async function sendChatMessage(broadcasterUserId: string | number, messag
     // userToken should be the bot account's (gee-bot) own OAuth token.
     const token = userToken || await getAccessToken();
 
-    const payload = {
-        content: message,
-        type: 'bot',
-        broadcaster_user_id: parseInt(broadcasterUserId.toString(), 10)
-    };
-
-    console.log(`[Kick API] Sending chat message to broadcaster ID: ${broadcasterUserId} | Token Prefix: ${token.substring(0, 15)}...`);
-    console.log(`[Kick API] Payload:`, JSON.stringify(payload));
-
     const response = await fetch('https://api.kick.com/public/v1/chat', {
         method: 'POST',
         headers: {
@@ -212,12 +203,15 @@ export async function sendChatMessage(broadcasterUserId: string | number, messag
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+            content: message,
+            type: 'bot',
+            broadcaster_user_id: parseInt(broadcasterUserId.toString(), 10)
+        })
     });
 
     if (!response.ok) {
         const errText = await response.text();
-        console.error(`[Kick API] REJECTED (Status ${response.status}): ${errText}`);
         throw new Error(`Failed to send chat message: ${response.status} ${errText}`);
     }
 
