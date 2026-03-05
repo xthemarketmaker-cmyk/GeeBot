@@ -88,6 +88,7 @@ app.get('/health', (req, res) => {
 // OAuth Callback for linking streamer channels (Phase 2)
 app.get('/auth/kick/callback', async (req, res) => {
     // This page serves as a bridge to get the PKCE verifier from browser sessionStorage
+    res.setHeader('Content-Type', 'text/html');
     res.send(`
         <html>
         <body style="background: #111; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh;">
@@ -99,55 +100,65 @@ app.get('/auth/kick/callback', async (req, res) => {
                     <div>• Verifier Detected: <span id="debug-verifier">Checking...</span></div>
                     <div>• Server Handshake: <span id="debug-handshake">Waiting...</span></div>
                 </div>
+                <div style="margin-top: 20px;">
+                    <button onclick="window.location.href='/'" style="background: #333; color: #888; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 0.7rem;">Cancel & Return</button>
+                </div>
             </div>
             <script>
-                const urlParams = new URLSearchParams(window.location.search);
-                const code = urlParams.get('code');
-                const state = urlParams.get('state');
-                const verifier = sessionStorage.getItem('kick_oauth_verifier');
-                
-                document.getElementById('debug-code').textContent = code ? 'YES' : 'MISSING';
-                document.getElementById('debug-verifier').textContent = verifier ? 'YES' : 'MISSING';
+                window.onload = function() {
+                    try {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const code = urlParams.get('code');
+                        const state = urlParams.get('state');
+                        const verifier = sessionStorage.getItem('kick_oauth_verifier');
+                        
+                        document.getElementById('debug-code').textContent = code ? 'YES' : 'MISSING';
+                        document.getElementById('debug-verifier').textContent = verifier ? 'YES' : 'MISSING';
 
-                // Timeout after 30 seconds
-                const timeout = setTimeout(() => {
-                    document.getElementById('main-status').textContent = 'Hanging...';
-                    document.getElementById('sub-status').textContent = 'The server is taking too long. Check your Railway logs for a "Step 1" message.';
-                    document.getElementById('debug-handshake').textContent = 'TIMEOUT';
-                }, 30000);
+                        const timeout = setTimeout(() => {
+                            document.getElementById('main-status').textContent = 'Hanging...';
+                            document.getElementById('sub-status').textContent = 'The server is taking too long. Check your Railway logs for a "Step 1" message.';
+                            document.getElementById('debug-handshake').textContent = 'TIMEOUT';
+                        }, 30000);
 
-                if (!code || !verifier) {
-                    clearTimeout(timeout);
-                    document.getElementById('main-status').textContent = 'Missing Handshake Data';
-                    document.getElementById('sub-status').textContent = 'The security token or authorization code is missing. Try clicking the link button again.';
-                    return;
-                }
+                        if (!code || !verifier) {
+                            clearTimeout(timeout);
+                            document.getElementById('main-status').textContent = 'Missing Handshake Data';
+                            document.getElementById('sub-status').textContent = 'The security token or authorization code is missing. Try clicking the link button again.';
+                            return;
+                        }
 
-                document.getElementById('debug-handshake').textContent = 'In Progress...';
+                        document.getElementById('debug-handshake').textContent = 'In Progress...';
 
-                fetch('/api/auth/complete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code, verifier, state })
-                })
-                .then(r => r.json())
-                .then(data => {
-                    clearTimeout(timeout);
-                    if (data.success) {
-                        document.getElementById('debug-handshake').textContent = 'SUCCESS';
-                        window.location.href = '/?linked=true';
-                    } else {
-                        document.getElementById('debug-handshake').textContent = 'FAILED';
-                        document.getElementById('main-status').textContent = 'Server Error';
-                        document.getElementById('sub-status').textContent = data.error;
+                        fetch('/api/auth/complete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ code, verifier, state })
+                        })
+                        .then(r => r.json())
+                        .then(data => {
+                            clearTimeout(timeout);
+                            if (data.success) {
+                                document.getElementById('debug-handshake').textContent = 'SUCCESS';
+                                window.location.href = '/?linked=true';
+                            } else {
+                                document.getElementById('debug-handshake').textContent = 'FAILED';
+                                document.getElementById('main-status').textContent = 'Server Error';
+                                document.getElementById('sub-status').textContent = data.error;
+                            }
+                        })
+                        .catch(err => {
+                            clearTimeout(timeout);
+                            document.getElementById('debug-handshake').textContent = 'NETWORK ERROR';
+                            document.getElementById('main-status').textContent = 'Connection Error';
+                            document.getElementById('sub-status').textContent = 'Could not reach the backend: ' + err.message;
+                        });
+                    } catch (e) {
+                        alert('Script Error: ' + e.message);
+                        document.getElementById('main-status').textContent = 'Script Error';
+                        document.getElementById('sub-status').textContent = e.message;
                     }
-                })
-                .catch(err => {
-                    clearTimeout(timeout);
-                    document.getElementById('debug-handshake').textContent = 'NETWORK ERROR';
-                    document.getElementById('main-status').textContent = 'Connection Error';
-                    document.getElementById('sub-status').textContent = 'Could not reach the backend. Error: ' + err.message;
-                });
+                };
             </script>
         </body>
         </html>
