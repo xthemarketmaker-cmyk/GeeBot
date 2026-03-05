@@ -9,6 +9,7 @@ import db from './db';
 import { generateChatResponse } from './ai';
 import * as kickApi from './kick_api';
 import crypto from 'crypto';
+import Pusher from 'pusher-js';
 
 // Load environment variables
 dotenv.config();
@@ -97,6 +98,78 @@ io.on('connection', (socket) => {
         console.log(`Client disconnected: ${socket.id}`);
     });
 });
+
+// --- PUSHER WEBSOCKET IMPLEMENTATION (KICK CHAT READER) ---
+// Kick's official HTTP Webhooks for chat are currently broken/unreliable.
+// We instead connect directly to their Pusher WebSocket cluster to read chat live.
+const activePusherSubs = new Map<string, any>();
+const KICK_PUSHER_APP_KEY = '32cbd69e4b950bf97679'; // Kick's public Pusher key
+const KICK_PUSHER_CLUSTER = 'us2';
+
+function subscribeToKickChat(chatroomId: string, channelId: string, streamerName: string) {
+    if (activePusherSubs.has(chatroomId)) {
+        console.log(`[Pusher] Already listening to chatroom ${chatroomId} (@${streamerName})`);
+        return;
+    }
+
+    console.log(`[Pusher] Connecting to Kick WebSocket for @${streamerName} (Room ID: ${chatroomId})...`);
+
+    // Initialize Pusher Client
+    const pusher = new Pusher(KICK_PUSHER_APP_KEY, {
+        cluster: KICK_PUSHER_CLUSTER,
+        wsHost: 'ws-us2.pusher.com',
+        wsPort: 443,
+        wssPort: 443,
+        forceTLS: true,
+        enabledTransports: ['ws', 'wss']
+    });
+
+    // The channel name format for a Kick chatroom
+    const pusherChannelName = `chatrooms.${chatroomId}.v2`;
+    const channel = pusher.subscribe(pusherChannelName);
+
+    // Bind to the specific event Kick uses for new messages
+    channel.bind('App\\Events\\ChatMessageEvent', async (data: any) => {
+        const sender = data.sender?.username || 'Unknown';
+        const content = data.content || '';
+        const senderId = data.sender?.id?.toString() || '0';
+
+        // Ignore messages sent by our own bot to prevent loops
+        if (sender.toLowerCase() === BOT_KICK_SLUG) return;
+
+        console.log(`[Pusher Chat] @${streamerName} | ${sender}: ${content}`);
+
+        // 1. Save to Chat History
+        const insertChat = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
+        insertChat.run(channelId, senderId, sender, content);
+
+        // 2. Broadcast raw message to Frontend overlay via WebSockets
+        io.emit('chatMessage', { sender, content });
+
+        // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
+        if (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot')) {
+            const aiResponse = await generateChatResponse(sender, content);
+            console.log(`[GeeBot AI Replying]: ${aiResponse}`);
+
+            try {
+                const sendToken = getSendToken(channelId);
+                await kickApi.sendChatMessage(channelId, aiResponse, sendToken);
+            } catch (err) {
+                console.error('Failed to send official chat response:', err);
+            }
+
+            // Also emit the bot's response to the overlay
+            io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse });
+        }
+    });
+
+    pusher.connection.bind('connected', () => {
+        console.log(`[Pusher] Connected successfully to @${streamerName}'s chat!`);
+    });
+
+    activePusherSubs.set(chatroomId, pusher);
+}
+// ------------------------------------------------------------
 
 // Basic health check route
 app.get('/health', (req, res) => {
@@ -218,6 +291,15 @@ app.post('/api/auth/complete', async (req, res) => {
         stmt.run(channelId.toString(), 'kick_user_token', accessToken);
         stmt.run(channelId.toString(), 'streamer_name', streamerName);
 
+        // Save the chatroom_id if we got it, so we can reconnect Pusher on server restart
+        if (userInfo.chatroom_id) {
+            stmt.run(channelId.toString(), 'chatroom_id', userInfo.chatroom_id.toString());
+            // Instantly subscribe the bot to this channel's live chat via Pusher WebSocket
+            subscribeToKickChat(userInfo.chatroom_id.toString(), channelId.toString(), streamerName);
+        } else {
+            console.warn(`[OAuth Server] Warning: Could not extract chatroom_id for ${streamerName}. Live chat reading will fail.`);
+        }
+
         // 4. Send welcome message — do NOT let this block or fail the auth flow
         console.log('[OAuth Server] Step 4: Sending join message...');
         const sendToken = getSendToken(channelId.toString()) || accessToken;
@@ -301,8 +383,8 @@ app.post('/webhook/kick', async (req: any, res) => {
 
         // Kick's official webhook event type for chat messages is 'chat.message.sent'
         if (payload.event === 'chat.message.sent') {
-            const sender   = payload.data?.sender?.username || 'Unknown';
-            const content  = payload.data?.content || '';
+            const sender = payload.data?.sender?.username || 'Unknown';
+            const content = payload.data?.content || '';
             const senderId = payload.data?.sender?.user_id?.toString() || '0';
             // broadcaster.user_id is the numeric ID of the channel this message came from
             const channelId = payload.data?.broadcaster?.user_id?.toString() || '';
@@ -338,4 +420,13 @@ app.post('/webhook/kick', async (req: any, res) => {
 httpServer.listen(PORT, () => {
     console.log(`GeeBot Core Service running on port ${PORT}`);
     console.log(`WebSocket Server listening on port ${PORT}`);
+
+    // Auto-reconnect Pusher to all previously linked channels
+    const linkedChannels = db.prepare("SELECT channel_id, value FROM settings WHERE key = 'streamer_name' AND channel_id != '__bot__'").all() as { channel_id: string, value: string }[];
+    for (const channel of linkedChannels) {
+        const chatroomIdRow = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?').get(channel.channel_id, 'chatroom_id') as { value: string } | undefined;
+        if (chatroomIdRow?.value) {
+            subscribeToKickChat(chatroomIdRow.value, channel.channel_id, channel.value);
+        }
+    }
 });

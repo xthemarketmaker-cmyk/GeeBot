@@ -124,7 +124,8 @@ export async function getAuthenticatedUser(accessToken: string) {
                         user_id: id.toString(),
                         username: payload?.username || payload?.name || 'Unknown',
                         // Sometimes the API gives us `channel_id` directly, other times just the user ID which works too
-                        channel_id: payload?.channel_id || payload?.channel?.id || id.toString()
+                        channel_id: payload?.channel_id || payload?.channel?.id || id.toString(),
+                        chatroom_id: payload?.chatroom?.id // Extract chatroom ID if present in the payload
                     };
                 } else {
                     console.log(`[OAuth Search] Got 200 OK from ${url} but no user ID found in payload.`);
