@@ -196,6 +196,15 @@ export async function sendChatMessage(broadcasterUserId: string | number, messag
     // userToken should be the bot account's (gee-bot) own OAuth token.
     const token = userToken || await getAccessToken();
 
+    const payload = {
+        content: message,
+        type: 'bot',
+        broadcaster_user_id: parseInt(broadcasterUserId.toString(), 10)
+    };
+
+    console.log(`[Kick API] Sending chat message to broadcaster ID: ${broadcasterUserId} | Token Prefix: ${token.substring(0, 15)}...`);
+    console.log(`[Kick API] Payload:`, JSON.stringify(payload));
+
     const response = await fetch('https://api.kick.com/public/v1/chat', {
         method: 'POST',
         headers: {
@@ -203,15 +212,12 @@ export async function sendChatMessage(broadcasterUserId: string | number, messag
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         },
-        body: JSON.stringify({
-            content: message,
-            type: 'bot',
-            broadcaster_user_id: parseInt(broadcasterUserId.toString(), 10)
-        })
+        body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
         const errText = await response.text();
+        console.error(`[Kick API] REJECTED (Status ${response.status}): ${errText}`);
         throw new Error(`Failed to send chat message: ${response.status} ${errText}`);
     }
 
