@@ -11,6 +11,36 @@ db.pragma('journal_mode = WAL');
 
 // Initialize database schema
 export const initDb = () => {
+    try {
+        const settingsCols = db.pragma('table_info(settings)') as { name: string }[];
+        if (settingsCols.length > 0 && !settingsCols.some(c => c.name === 'channel_id')) {
+            console.log('Migrating database schema for multi-channel support...');
+
+            // Migrate settings, transferring old keys to __bot__ scope
+            db.exec(`
+                CREATE TABLE settings_new (
+                    channel_id TEXT,
+                    key TEXT,
+                    value TEXT,
+                    PRIMARY KEY (channel_id, key)
+                );
+                INSERT INTO settings_new (channel_id, key, value) 
+                SELECT '__bot__', key, value FROM settings;
+                DROP TABLE settings;
+                ALTER TABLE settings_new RENAME TO settings;
+            `);
+
+            // Drop others to be recreated clean
+            db.exec('DROP TABLE IF EXISTS users');
+            db.exec('DROP TABLE IF EXISTS widgets');
+            db.exec('DROP TABLE IF EXISTS chat_history');
+
+            console.log('Migration completed successfully.');
+        }
+    } catch (e) {
+        console.error('Migration failed:', e);
+    }
+
     // 1. Users table - tracked per channel (points vary per streamer)
     db.exec(`
         CREATE TABLE IF NOT EXISTS users (
