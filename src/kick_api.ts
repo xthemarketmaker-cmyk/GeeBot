@@ -83,24 +83,55 @@ export async function exchangeCodeForToken(code: string, verifier: string) {
 
 // Get information about the user who just authorized
 export async function getAuthenticatedUser(accessToken: string) {
-    const response = await fetch('https://api.kick.com/public/v1/users', {
-        headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Accept': 'application/json'
-        }
-    });
+    // Kick's API endpoints can be fluid. We will probe the known endpoints
+    const endpointsToTry = [
+        'https://id.kick.com/api/v1/user',
+        'https://kick.com/api/v1/user',
+        'https://api.kick.com/public/v1/users',
+        'https://api.kick.com/public/v1/user',
+        'https://api.kick.com/v1/user'
+    ];
 
-    if (!response.ok) {
-        throw new Error(`Failed to fetch user info: ${response.status}`);
+    let lastErrorText = '';
+
+    for (const url of endpointsToTry) {
+        try {
+            console.log(`[OAuth Search] Trying to fetch user info from: ${url}`);
+            const response = await fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Accept': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json() as any;
+                console.log(`[OAuth Search] SUCCESS on ${url}:`, JSON.stringify(data).substring(0, 300));
+
+                // Handle both wrapped { data: { id: ... } } and flat { id: ... } structures
+                const payload = data.data || data;
+
+                // Make sure we actually have an ID before declaring success
+                const id = payload?.id || payload?.user_id || payload?.sub;
+
+                if (id) {
+                    return {
+                        user_id: id.toString(),
+                        username: payload?.username || payload?.name || 'Unknown',
+                        channel_id: payload?.channel?.id || payload?.channel_id || id.toString()
+                    };
+                } else {
+                    console.log(`[OAuth Search] Got 200 OK from ${url} but no user ID found in payload.`);
+                }
+            } else {
+                console.log(`[OAuth Search] FAILED on ${url} with status ${response.status}`);
+            }
+        } catch (err: any) {
+            console.error(`[OAuth Search] Network error on ${url}:`, err.message);
+        }
     }
 
-    const data = await response.json() as any;
-
-    return {
-        user_id: data.data.id,
-        username: data.data.username,
-        channel_id: data.data.channel?.id || data.data.id
-    };
+    throw new Error('Failed to fetch user data from any known Kick endpoints. They may have updated their API structure.');
 }
 
 // Search for a channel by its name/slug to get its ID
