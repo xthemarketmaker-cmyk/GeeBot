@@ -7,7 +7,7 @@ import path from 'path';
 import { initDb } from './db';
 import db from './db';
 import { generateChatResponse } from './ai';
-import { sendChatMessage } from './kick_api';
+import * as kickApi from './kick_api';
 
 // Load environment variables
 dotenv.config();
@@ -60,21 +60,15 @@ app.get('/auth/kick/callback', async (req, res) => {
                 const code = urlParams.get('code');
                 const state = urlParams.get('state');
                 const verifier = sessionStorage.getItem('kick_oauth_verifier');
-                const debugDiv = document.getElementById('debug-info');
-
-                console.log('[GeeBot OAuth Bridge] Code:', !!code, 'State:', !!state, 'Verifier:', !!verifier);
                 
+                // Timeout after 20 seconds
+                const timeout = setTimeout(() => {
+                    document.getElementById('status-container').innerHTML = '<h2>Hanging...</h2><p>The server is taking too long. Check your Railway logs for errors.</p>';
+                }, 20000);
+
                 if (!code || !verifier) {
-                    let errorMsg = 'Error: Missing Auth Data. ';
-                    if (!code) errorMsg += 'Missing "code" in URL. ';
-                    if (!verifier) errorMsg += 'Missing "verifier" in sessionStorage (Origin mismatch?). ';
-                    
-                    document.getElementById('status-container').innerHTML = \`
-                        <h2 style="color: #ff5555;">Linking Failed</h2>
-                        <p>\${errorMsg}</p>
-                        <p style="font-size: 0.9rem;">Make sure you are accessing the dashboard on the SAME URL as your redirect portal.</p>
-                        <button onclick="window.location.href='/'" style="background: #53fc18; color: black; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Back to Dashboard</button>
-                    \`;
+                    clearTimeout(timeout);
+                    document.getElementById('status-container').innerHTML = '<h2>Data Missing</h2><p>Please try linking again from the live URL.</p>';
                     return;
                 }
 
@@ -85,14 +79,16 @@ app.get('/auth/kick/callback', async (req, res) => {
                 })
                 .then(r => r.json())
                 .then(data => {
+                    clearTimeout(timeout);
                     if (data.success) {
                         window.location.href = '/?linked=true';
                     } else {
-                        alert('Connection failed on server: ' + data.error);
+                        document.getElementById('status-container').innerHTML = '<h2>Server Error</h2><p>' + data.error + '</p>';
                     }
                 })
                 .catch(err => {
-                    alert('Network error finalizing connection: ' + err.message);
+                    clearTimeout(timeout);
+                    document.getElementById('status-container').innerHTML = '<h2>Network Error</h2><p>' + err.message + '</p>';
                 });
             </script>
         </body>
@@ -103,18 +99,18 @@ app.get('/auth/kick/callback', async (req, res) => {
 // Endpoint to exchange code for token and join channel
 app.post('/api/auth/complete', async (req, res) => {
     const { code, verifier } = req.body;
-    console.log('[OAuth Server] Starting token exchange for code:', code?.substring(0, 5) + '...');
+    console.log('[OAuth Server] Starting token exchange...');
 
     try {
         // 1. Exchange code for token
         console.log('[OAuth Server] Step 1: Exchanging code...');
-        const tokenResponse = await (await import('./kick_api')).exchangeCodeForToken(code, verifier);
+        const tokenResponse = await kickApi.exchangeCodeForToken(code, verifier);
         const accessToken = tokenResponse.access_token;
         console.log('[OAuth Server] Step 1 Success: Token acquired.');
 
         // 2. Identify the Streamer via the token
         console.log('[OAuth Server] Step 2: Fetching user info...');
-        const userInfo = await (await import('./kick_api')).getAuthenticatedUser(accessToken);
+        const userInfo = await kickApi.getAuthenticatedUser(accessToken);
         const channelId = userInfo.channel_id;
         const streamerName = userInfo.username;
         console.log(`[OAuth Server] Step 2 Success: Linked streamer ${streamerName} (${channelId})`);
@@ -127,13 +123,13 @@ app.post('/api/auth/complete', async (req, res) => {
 
         // 4. Send a "HELLO" message to join the chat
         console.log('[OAuth Server] Step 4: Sending join message...');
-        await (await import('./kick_api')).sendChatMessage(channelId.toString(), `[Gee_Bot] System Online! I have successfully connected to your channel, @${streamerName}. 🟢`);
+        await kickApi.sendChatMessage(channelId.toString(), `[Gee_Bot] System Online! I have successfully connected to your channel, @${streamerName}. 🟢`);
         console.log('[OAuth Server] Step 4 Success: Message sent.');
 
         res.json({ success: true });
     } catch (err: any) {
         console.error('[OAuth Server] ERROR during finalization:', err.message);
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: err.message || 'Unknown server error' });
     }
 });
 
@@ -192,16 +188,10 @@ app.post('/webhook/kick', async (req, res) => {
                 console.log(`[GeeBot AI Replying]: ${aiResponse}`);
 
                 // Use the Official Kick API to send response back to the chat room
-                if (channelId) {
-                    // Save bot response to DB for context immediately
-                    const insertBotMsg = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
-                    insertBotMsg.run(channelId.toString(), '0', 'Gee_Bot', aiResponse);
-
-                    try {
-                        await sendChatMessage(channelId.toString(), aiResponse);
-                    } catch (err) {
-                        console.error('Failed to send official chat response (expected if channel_id is simulated):', err);
-                    }
+                try {
+                    await kickApi.sendChatMessage(channelId.toString(), aiResponse);
+                } catch (err) {
+                    console.error('Failed to send official chat response:', err);
                 }
 
                 io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse }); // Broadcast bot message to overlay too
