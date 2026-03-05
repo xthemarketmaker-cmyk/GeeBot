@@ -83,7 +83,7 @@ export async function exchangeCodeForToken(code: string, verifier: string) {
 
 // Get information about the user who just authorized
 export async function getAuthenticatedUser(accessToken: string) {
-    const response = await fetch('https://api.kick.com/public/v1/user', {
+    const response = await fetch('https://api.kick.com/public/v1/users', {
         headers: {
             'Authorization': `Bearer ${accessToken}`,
             'Accept': 'application/json'
