@@ -16,7 +16,7 @@ Keep your responses concise, professional yet fun, and under 200 characters.`;
 export async function generateChatResponse(username: string, message: string): Promise<string> {
     try {
         if (!process.env.GROK_API_KEY || process.env.GROK_API_KEY === 'your_grok_api_key_here') {
-            return `[GeeBot AI Offline] Hello @${username}! The streamer hasn't configured my Grok AI "brain" yet!`;
+            return `[GeeBot AI Offline] Hello ${username}! The streamer hasn't configured my Grok AI "brain" yet!`;
         }
 
         // Fetch custom personality from settings
@@ -54,6 +54,6 @@ export async function generateChatResponse(username: string, message: string): P
 
     } catch (error) {
         console.error('Error in AI Chat Module:', error);
-        return `@${username} Oops, my circuits are a bit fried right now.`;
+        return `Oops, my circuits are a bit fried right now.`;
     }
 }

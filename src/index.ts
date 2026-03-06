@@ -335,7 +335,7 @@ app.post('/api/auth/complete', async (req, res) => {
             // Also instantly subscribe to bot's own chat
             subscribeToKickChat(finalChatroomId, channelId.toString(), streamerName);
 
-            return res.json({ success: true, isBotAccount: true });
+            // Fall through to register the bot's own channel as a normal streamer so the welcome message is sent!
         }
 
         // 3b. Regular streamer linking their channel
@@ -449,7 +449,11 @@ app.post('/webhook/kick', async (req: any, res) => {
             io.emit('chatMessage', { sender, content });
 
             // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
-            if (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot')) {
+            const normalizedSender = sender.toLowerCase().replace(/_/g, '-');
+            const normalizedBot = BOT_KICK_SLUG.toLowerCase().replace(/_/g, '-');
+            const isBotSelf = normalizedSender === normalizedBot || normalizedSender === 'gee-bot' || normalizedSender === 'geebot' || normalizedSender === 'gee_bot';
+
+            if (!isBotSelf && (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot'))) {
                 const aiResponse = await generateChatResponse(sender, content);
                 console.log(`[GeeBot AI Replying]: ${aiResponse}`);
 
