@@ -10,6 +10,7 @@ import { generateChatResponse } from './ai';
 import * as kickApi from './kick_api';
 import crypto from 'crypto';
 import Pusher from 'pusher-js';
+import { startTrivia, checkTriviaAnswer } from './games';
 
 // Load environment variables
 dotenv.config();
@@ -170,14 +171,38 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
             lowerContent.includes('gee-bot');
 
         // Fetch AI settings
+        // Fetch AI settings (needed for both game and AI logic)
         const aiEnabledRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_enabled'").get(channelId) as { value: string } | undefined;
         const aiProbRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_probability'").get(channelId) as { value: string } | undefined;
         const aiMode = aiProbRow?.value || 'mentions';
 
         let shouldTrigger = false;
 
-        // Only trigger AI if the AI module is enabled
+        // 3. GAME ENGINE: Check for trivia answers or commands
+        const sendToken = getSendToken(channelId);
+        const gamesEnabled = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'games_enabled'").get(channelId) as { value: string } | undefined;
+
+        if (gamesEnabled?.value !== 'false') {
+            // Check if this message is a trivia answer
+            const wasAnswer = await checkTriviaAnswer(channelId, sender, senderId, content, sendToken);
+            if (wasAnswer) return;
+
+            // Check if this is a command to start trivia
+            if (content.trim().toLowerCase() === '!trivia') {
+                await startTrivia(channelId, sendToken);
+                return;
+            }
+        }
+
+        // 4. AI trigger mechanism
         if (aiEnabledRow?.value !== 'false') {
+            const lowerContent = content.toLowerCase();
+            const isMentioned = lowerContent.includes('@geebot') ||
+                lowerContent.includes('geebot') ||
+                lowerContent.includes('@gee_bot') ||
+                lowerContent.includes('gee_bot') ||
+                lowerContent.includes('gee-bot');
+
             if (aiMode === 'everywhere') {
                 shouldTrigger = true;
             } else if (aiMode === 'random') {
@@ -188,20 +213,6 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
         }
 
         if (shouldTrigger) {
-            // Check for Games first
-            if (content.startsWith('!trivia')) {
-                const gamesEnabled = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'games_enabled'").get(channelId) as { value: string } | undefined;
-                if (gamesEnabled?.value !== 'false') {
-                    const triviaResponse = "Coming soon: I am still loading my trivia database! Stay tuned. 🧠";
-                    io.emit('chatMessage', { sender: 'Gee_Bot', content: triviaResponse });
-                    try {
-                        const sendToken = getSendToken(channelId);
-                        await kickApi.sendChatMessage(channelId, triviaResponse, sendToken);
-                    } catch (err) { }
-                    return;
-                }
-            }
-
             console.log(`[GeeBot Trigger] AI responding to ${sender} (Mode: ${aiMode}): "${content}"`);
             const aiResponse = await generateChatResponse(sender, content);
             console.log(`[GeeBot AI Replying]: ${aiResponse}`);
@@ -506,10 +517,24 @@ app.post('/webhook/kick', async (req: any, res) => {
 
             if (isBotSelf) return;
 
-            // Fetch AI settings
+            // Fetch AI settings (needed for both game and AI logic)
             const aiEnabledRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_enabled'").get(channelId) as { value: string } | undefined;
             const aiProbRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_probability'").get(channelId) as { value: string } | undefined;
             const aiMode = aiProbRow?.value || 'mentions';
+
+            // 3. GAME ENGINE: Check for trivia answers or commands
+            const sendToken = getSendToken(channelId);
+            const gamesEnabled = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'games_enabled'").get(channelId) as { value: string } | undefined;
+
+            if (gamesEnabled?.value !== 'false') {
+                const wasAnswer = await checkTriviaAnswer(channelId, sender, senderId, content, sendToken);
+                if (wasAnswer) return;
+
+                if (content.trim().toLowerCase() === '!trivia') {
+                    await startTrivia(channelId, sendToken);
+                    return;
+                }
+            }
 
             let shouldTrigger = false;
             const lowerContent = content.toLowerCase();

@@ -4,7 +4,7 @@ import db from './db';
 
 dotenv.config();
 
-const openai = new OpenAI({
+export const openai = new OpenAI({
     apiKey: process.env.GROK_API_KEY || '',
     baseURL: 'https://api.x.ai/v1' // xAI (Grok) API compatibility layer
 });
