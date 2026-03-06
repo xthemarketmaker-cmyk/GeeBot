@@ -22,7 +22,11 @@ export async function generateChatResponse(username: string, message: string): P
         // Fetch custom personality from settings
         const settingsStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
         const customPersonality = settingsStmt.get('ai_personality') as { value: string } | undefined;
-        const systemPrompt = customPersonality?.value || SYSTEM_PROMPT;
+        let systemPrompt = customPersonality?.value || SYSTEM_PROMPT;
+
+        // Dynamically inject the current date into the prompt so the AI knows what year it is
+        const currentDate = new Date().toISOString().split('T')[0];
+        systemPrompt += `\nCRITICAL CONTEXT: The current year is ${new Date().getFullYear()}, and today's date is ${currentDate}. You must respond using this as your current timeline baseline.`;
 
         // Fetch recent context for the AI from the database.
         const recentMessagesStmt = db.prepare('SELECT username, message FROM chat_history ORDER BY id DESC LIMIT 10');
