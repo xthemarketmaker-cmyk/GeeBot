@@ -38,7 +38,7 @@ export async function generateChatResponse(username: string, message: string): P
         console.log(`[Grok AI] Context messges: ${contextMessages.length}`);
 
         const response = await openai.chat.completions.create({
-            model: 'grok-2-latest', // Using latest Grok 2 API
+            model: 'grok-3', // Using grok-3 which was verified to work with this API key
             messages: [
                 { role: 'system', content: systemPrompt },
                 ...contextMessages,
