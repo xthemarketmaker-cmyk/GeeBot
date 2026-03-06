@@ -138,7 +138,8 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
         console.log(`[Pusher Chat] RAW EVENT: @${streamerName} | ${sender}: ${content} (ID: ${senderId})`);
 
         // Ignore messages sent by our own bot to prevent loops
-        const normalizedSender = sender.toLowerCase().replace(/_/g, '-');
+        const cleanSender = sender.replace(/^@/, '');
+        const normalizedSender = cleanSender.toLowerCase().replace(/_/g, '-');
         const normalizedBot = BOT_KICK_SLUG.toLowerCase().replace(/_/g, '-');
 
         if (normalizedSender === normalizedBot || normalizedSender === 'gee-bot' || normalizedSender === 'geebot' || normalizedSender === 'gee_bot') {
@@ -449,7 +450,8 @@ app.post('/webhook/kick', async (req: any, res) => {
             io.emit('chatMessage', { sender, content });
 
             // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
-            const normalizedSender = sender.toLowerCase().replace(/_/g, '-');
+            const cleanSender = sender.replace(/^@/, '');
+            const normalizedSender = cleanSender.toLowerCase().replace(/_/g, '-');
             const normalizedBot = BOT_KICK_SLUG.toLowerCase().replace(/_/g, '-');
             const isBotSelf = normalizedSender === normalizedBot || normalizedSender === 'gee-bot' || normalizedSender === 'geebot' || normalizedSender === 'gee_bot';
 
