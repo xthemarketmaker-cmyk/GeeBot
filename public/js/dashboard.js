@@ -93,7 +93,116 @@ if (linkBtn) {
     });
 }
 
-// UI Actions
+// --- REFINED SETTINGS & AUTOMATION LOGIC ---
+const botToggle = document.getElementById('bot-enabled-toggle');
+const aiToggle = document.getElementById('ai-enabled-toggle');
+const gamesToggle = document.getElementById('games-enabled-toggle');
+const adsToggle = document.getElementById('ads-enabled-toggle');
+const togglesBtn = document.getElementById('save-toggles-btn');
+
+// Ad elements
+const adList = document.getElementById('ad-list');
+const adContent = document.getElementById('ad-content');
+const adInterval = document.getElementById('ad-interval');
+const addAdBtn = document.getElementById('add-ad-btn');
+
+// Use a simple prompt for channel ID for now, or default to __bot__
+let currentChannelId = sessionStorage.getItem('current_channel_id') || '__bot__';
+
+// Save Toggles
+if (togglesBtn) {
+    togglesBtn.addEventListener('click', async () => {
+        const settings = {
+            channelId: currentChannelId,
+            bot_enabled: botToggle.checked.toString(),
+            ai_enabled: aiToggle.checked.toString(),
+            games_enabled: gamesToggle.checked.toString(),
+            ads_enabled: adsToggle.checked.toString()
+        };
+
+        try {
+            const resp = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            if (resp.ok) showToast("Modules Updated Successfully!");
+        } catch (err) {
+            console.error('Toggle save failed:', err);
+        }
+    });
+}
+
+// Ads Management
+async function loadAds() {
+    try {
+        const resp = await fetch(`/api/ads?channelId=${currentChannelId}`);
+        const ads = await resp.json();
+        adList.innerHTML = '';
+
+        if (ads.length === 0) {
+            adList.innerHTML = '<p class="placeholder">No scheduled ads yet.</p>';
+            return;
+        }
+
+        ads.forEach(ad => {
+            const adItem = document.createElement('div');
+            adItem.className = 'ad-item glass';
+            adItem.innerHTML = `
+                <div>
+                    <p class="ad-text">"${ad.content}"</p>
+                    <small>Interval: ${ad.interval_minutes} minutes</small>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="deleteAd(${ad.id})">Delete</button>
+            `;
+            adList.appendChild(adItem);
+        });
+    } catch (err) {
+        console.error('Failed to load ads:', err);
+    }
+}
+
+if (addAdBtn) {
+    addAdBtn.addEventListener('click', async () => {
+        const content = adContent.value;
+        const interval = adInterval.value;
+
+        if (!content) return showToast("Please enter ad content!");
+
+        try {
+            const resp = await fetch('/api/ads', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    channel_id: currentChannelId,
+                    content,
+                    interval_minutes: parseInt(interval)
+                })
+            });
+            if (resp.ok) {
+                adContent.value = '';
+                showToast("Ad Scheduled!");
+                loadAds();
+            }
+        } catch (err) {
+            console.error('Add ad failed:', err);
+        }
+    });
+}
+
+window.deleteAd = async (id) => {
+    try {
+        const resp = await fetch(`/api/ads/${id}`, { method: 'DELETE' });
+        if (resp.ok) {
+            showToast("Ad Deleted.");
+            loadAds();
+        }
+    } catch (err) {
+        console.error('Delete ad failed:', err);
+    }
+};
+
+// UI Actions - Main Settings
 const aiPersonality = document.getElementById('ai-personality');
 const aiProbability = document.getElementById('ai-probability');
 const toast = document.getElementById('toast');
@@ -102,6 +211,7 @@ const saveBtn = document.getElementById('save-ai-settings');
 if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
         const settings = {
+            channelId: currentChannelId,
             ai_personality: aiPersonality.value,
             ai_probability: aiProbability.value
         };
@@ -133,15 +243,17 @@ function showToast(message) {
 // Fetch initial settings
 async function loadSettings() {
     try {
-        const resp = await fetch('/api/settings');
+        const resp = await fetch(`/api/settings?channelId=${currentChannelId}`);
         const settings = await resp.json();
 
-        if (settings.ai_personality) {
-            aiPersonality.value = settings.ai_personality;
-        }
-        if (settings.ai_probability) {
-            aiProbability.value = settings.ai_probability;
-        }
+        if (settings.ai_personality) aiPersonality.value = settings.ai_personality;
+        if (settings.ai_probability) aiProbability.value = settings.ai_probability;
+        if (settings.bot_enabled) botToggle.checked = settings.bot_enabled === 'true';
+        if (settings.ai_enabled) aiToggle.checked = settings.ai_enabled === 'true';
+        if (settings.games_enabled) gamesToggle.checked = settings.games_enabled === 'true';
+        if (settings.ads_enabled) adsToggle.checked = settings.ads_enabled === 'true';
+
+        loadAds();
     } catch (err) {
         console.error('Failed to load settings:', err);
     }
@@ -161,10 +273,8 @@ document.querySelectorAll('.copy-url').forEach(btn => {
     });
 });
 
-// Fetch initial stats (Mock for now)
+// Mock stats update
 function updateStats() {
-    // In a real app, we would fetch these from the Node.js API
-    // document.getElementById('total-points').innerText = ...
+    // Keep internal dashboard live loop if needed
 }
-
 updateStats();

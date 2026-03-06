@@ -32,6 +32,9 @@
                 <a href="#points" class="nav-item" data-tab="points">
                     <span class="icon">💰</span> Points System
                 </a>
+                <a href="#automation" class="nav-item" data-tab="automation">
+                    <span class="icon">🤖</span> Automation & Games
+                </a>
                 <a href="#widgets" class="nav-item" data-tab="widgets">
                     <span class="icon">🎨</span> Widgets & Overlays
                 </a>
@@ -120,6 +123,69 @@
                     </div>
 
                     <button class="btn btn-primary" id="save-ai-settings">Deploy AI Brain Updates</button>
+                </div>
+            </section>
+
+            <!-- Automation & Games Tab -->
+            <section id="automation-tab" class="tab-content">
+                <div class="settings-grid">
+                    <!-- Global Toggles -->
+                    <div class="settings-card glass">
+                        <h3>Master Module Toggles</h3>
+                        <p class="card-desc">Enable or disable specific bot components globally.</p>
+
+                        <div class="toggle-list">
+                            <div class="toggle-item">
+                                <span>Master Bot Logic</span>
+                                <div class="switch-container">
+                                    <input type="checkbox" id="bot-enabled-toggle" checked>
+                                    <label for="bot-enabled-toggle" class="switch"></label>
+                                </div>
+                            </div>
+                            <div class="toggle-item">
+                                <span>AI Response Engine</span>
+                                <div class="switch-container">
+                                    <input type="checkbox" id="ai-enabled-toggle" checked>
+                                    <label for="ai-enabled-toggle" class="switch"></label>
+                                </div>
+                            </div>
+                            <div class="toggle-item">
+                                <span>Trivia & Games</span>
+                                <div class="switch-container">
+                                    <input type="checkbox" id="games-enabled-toggle" checked>
+                                    <label for="games-enabled-toggle" class="switch"></label>
+                                </div>
+                            </div>
+                            <div class="toggle-item">
+                                <span>Ad Scheduler</span>
+                                <div class="switch-container">
+                                    <input type="checkbox" id="ads-enabled-toggle" checked>
+                                    <label for="ads-enabled-toggle" class="switch"></label>
+                                </div>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" id="save-toggles-btn" style="margin-top: 20px;">Save Module
+                            States</button>
+                    </div>
+
+                    <!-- Ad Scheduler -->
+                    <div class="settings-card glass">
+                        <h3>Ad Scheduler (Auto-Promo)</h3>
+                        <p class="card-desc">Scheduled messages to post in chat at fixed intervals.</p>
+
+                        <div id="ad-list" class="ad-list">
+                            <!-- Ads loaded via JS -->
+                        </div>
+
+                        <div class="add-ad-form">
+                            <textarea id="ad-content"
+                                placeholder="Enter your promo message or affiliate link..."></textarea>
+                            <div class="form-row">
+                                <input type="number" id="ad-interval" value="30" placeholder="Interval (min)">
+                                <button class="btn btn-outline" id="add-ad-btn">Add Scheduled Ad</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 

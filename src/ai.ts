@@ -24,9 +24,19 @@ export async function generateChatResponse(username: string, message: string): P
         const customPersonality = settingsStmt.get('ai_personality') as { value: string } | undefined;
         let systemPrompt = customPersonality?.value || SYSTEM_PROMPT;
 
-        // Dynamically inject the current date into the prompt so the AI knows what year it is
+        // Dynamically inject the current date into the prompt as background knowledge
         const currentDate = new Date().toISOString().split('T')[0];
-        systemPrompt += `\nCRITICAL CONTEXT: The current year is ${new Date().getFullYear()}, and today's date is ${currentDate}. You must respond using this as your current timeline baseline.`;
+        const currentYear = new Date().getFullYear();
+
+        // Refined system instructions for natural conversation
+        systemPrompt += `\n\nBACKGROUND KNOWLEDGE:
+- Current Year: ${currentYear}
+- Today's Date: ${currentDate}
+- Platform: Kick.com (streaming)
+- IMPORTANT: Do NOT mention the year or date unless explicitly asked.
+- IMPORTANT: Do NOT repeat generic greetings or catchphrases excessively.
+- IMPORTANT: Each response MUST be under 200 characters to fit Kick chat limits.
+- IMPORTANT: Be a natural part of the conversation, not a robotic assistant.`;
 
         // Fetch recent context for the AI from the database.
         const recentMessagesStmt = db.prepare('SELECT username, message FROM chat_history ORDER BY id DESC LIMIT 10');

@@ -137,6 +137,13 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
 
         console.log(`[Pusher Chat] RAW EVENT: @${streamerName} | ${sender}: ${content} (ID: ${senderId})`);
 
+        // 0. Check if bot is even enabled for this channel
+        const botEnabledRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'bot_enabled'").get(channelId) as { value: string } | undefined;
+        if (botEnabledRow?.value === 'false') {
+            console.log(`[Pusher] Bot is DISABLED for channel ${channelId}. Ignoring message.`);
+            return;
+        }
+
         // Ignore messages sent by our own bot to prevent loops
         const cleanSender = sender.replace(/^@/, '');
         const normalizedSender = cleanSender.toLowerCase().replace(/_/g, '-');
@@ -162,24 +169,39 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
             lowerContent.includes('gee_bot') ||
             lowerContent.includes('gee-bot');
 
-        // Fetch AI response probability setting from DB
-        // (Assuming global setting for now, or could be channel-specific later)
-        const probabilityRow = db.prepare("SELECT value FROM settings WHERE key = 'ai_probability'").get() as { value: string } | undefined;
-        const aiMode = probabilityRow?.value || 'mentions';
+        // Fetch AI settings
+        const aiEnabledRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_enabled'").get(channelId) as { value: string } | undefined;
+        const aiProbRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_probability'").get(channelId) as { value: string } | undefined;
+        const aiMode = aiProbRow?.value || 'mentions';
 
         let shouldTrigger = false;
 
-        if (aiMode === 'everywhere') {
-            shouldTrigger = true;
-        } else if (aiMode === 'random') {
-            // 20% chance to interject, plus always respond to mentions
-            shouldTrigger = isMentioned || Math.random() < 0.20;
-        } else {
-            // "mentions" (default)
-            shouldTrigger = isMentioned;
+        // Only trigger AI if the AI module is enabled
+        if (aiEnabledRow?.value !== 'false') {
+            if (aiMode === 'everywhere') {
+                shouldTrigger = true;
+            } else if (aiMode === 'random') {
+                shouldTrigger = isMentioned || Math.random() < 0.20;
+            } else {
+                shouldTrigger = isMentioned;
+            }
         }
 
         if (shouldTrigger) {
+            // Check for Games first
+            if (content.startsWith('!trivia')) {
+                const gamesEnabled = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'games_enabled'").get(channelId) as { value: string } | undefined;
+                if (gamesEnabled?.value !== 'false') {
+                    const triviaResponse = "Coming soon: I am still loading my trivia database! Stay tuned. 🧠";
+                    io.emit('chatMessage', { sender: 'Gee_Bot', content: triviaResponse });
+                    try {
+                        const sendToken = getSendToken(channelId);
+                        await kickApi.sendChatMessage(channelId, triviaResponse, sendToken);
+                    } catch (err) { }
+                    return;
+                }
+            }
+
             console.log(`[GeeBot Trigger] AI responding to ${sender} (Mode: ${aiMode}): "${content}"`);
             const aiResponse = await generateChatResponse(sender, content);
             console.log(`[GeeBot AI Replying]: ${aiResponse}`);
@@ -400,23 +422,43 @@ app.get('/api/debug', async (req, res) => {
 
 // API Routes for Dashboard
 app.get('/api/settings', (req, res) => {
-    const rows = db.prepare('SELECT * FROM settings').all() as { key: string, value: string }[];
+    const channelId = req.query.channelId?.toString() || '__bot__';
+    const rows = db.prepare('SELECT key, value FROM settings WHERE channel_id = ?').all(channelId) as { key: string, value: string }[];
     const settingsMap = rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
     res.json(settingsMap);
 });
 
 app.post('/api/settings', (req, res) => {
-    const settings = req.body;
-    const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    const { channelId = '__bot__', ...settings } = req.body;
+    const upsert = db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)');
 
     // Use a transaction for reliability
     const transaction = db.transaction((data) => {
         for (const [key, value] of Object.entries(data)) {
-            upsert.run(key, value);
+            upsert.run(channelId, key, value?.toString());
         }
     });
 
     transaction(settings);
+    res.json({ status: 'success' });
+});
+
+// Ad Schedule Management
+app.get('/api/ads', (req, res) => {
+    const channelId = req.query.channelId?.toString() || '__bot__';
+    const ads = db.prepare('SELECT * FROM ad_schedule WHERE channel_id = ?').all(channelId);
+    res.json(ads);
+});
+
+app.post('/api/ads', (req, res) => {
+    const { channel_id, content, interval_minutes } = req.body;
+    db.prepare('INSERT INTO ad_schedule (channel_id, content, interval_minutes) VALUES (?, ?, ?)')
+        .run(channel_id, content, interval_minutes);
+    res.json({ status: 'success' });
+});
+
+app.delete('/api/ads/:id', (req, res) => {
+    db.prepare('DELETE FROM ad_schedule WHERE id = ?').run(req.params.id);
     res.json({ status: 'success' });
 });
 
@@ -442,6 +484,13 @@ app.post('/webhook/kick', async (req: any, res) => {
             // broadcaster.user_id is the numeric ID of the channel this message came from
             const channelId = payload.data?.broadcaster?.user_id?.toString() || '';
 
+            // 0. Check if bot is even enabled for this channel
+            const botEnabledRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'bot_enabled'").get(channelId) as { value: string } | undefined;
+            if (botEnabledRow?.value === 'false') {
+                console.log(`[Webhook] Bot is DISABLED for channel ${channelId}.`);
+                return;
+            }
+
             // 1. Save to Chat History for AI context
             const insertChat = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
             insertChat.run(channelId, senderId, sender, content);
@@ -449,15 +498,36 @@ app.post('/webhook/kick', async (req: any, res) => {
             // 2. Broadcast raw message to Frontend overlay via WebSockets
             io.emit('chatMessage', { sender, content });
 
-            // 3. AI trigger — respond if message mentions @GeeBot or "geebot"
+            // 3. AI trigger mechanism
             const cleanSender = sender.replace(/^@/, '');
             const normalizedSender = cleanSender.toLowerCase().replace(/_/g, '-');
             const normalizedBot = BOT_KICK_SLUG.toLowerCase().replace(/_/g, '-');
             const isBotSelf = normalizedSender === normalizedBot || normalizedSender === 'gee-bot' || normalizedSender === 'geebot' || normalizedSender === 'gee_bot';
 
-            if (!isBotSelf && (content.toLowerCase().includes('@geebot') || content.toLowerCase().includes('geebot'))) {
+            if (isBotSelf) return;
+
+            // Fetch AI settings
+            const aiEnabledRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_enabled'").get(channelId) as { value: string } | undefined;
+            const aiProbRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ai_probability'").get(channelId) as { value: string } | undefined;
+            const aiMode = aiProbRow?.value || 'mentions';
+
+            let shouldTrigger = false;
+            const lowerContent = content.toLowerCase();
+            const isMentioned = lowerContent.includes('@geebot') || lowerContent.includes('geebot') || lowerContent.includes('@gee_bot') || lowerContent.includes('gee_bot') || lowerContent.includes('gee-bot');
+
+            if (aiEnabledRow?.value !== 'false') {
+                if (aiMode === 'everywhere') {
+                    shouldTrigger = true;
+                } else if (aiMode === 'random') {
+                    shouldTrigger = isMentioned || Math.random() < 0.20;
+                } else {
+                    shouldTrigger = isMentioned;
+                }
+            }
+
+            if (shouldTrigger) {
                 const aiResponse = await generateChatResponse(sender, content);
-                console.log(`[GeeBot AI Replying]: ${aiResponse}`);
+                console.log(`[GeeBot AI Webhook Replying]: ${aiResponse}`);
 
                 try {
                     const sendToken = getSendToken(channelId);
@@ -501,7 +571,44 @@ httpServer.listen(Number(PORT), '0.0.0.0', () => {
             subscribeToKickChat(chatroomIdRow.value, channel.channel_id, channel.value);
         }
     }
+
+    startAdScheduler();
 });
+
+function startAdScheduler() {
+    console.log('[Ad Scheduler] Starting background service...');
+    setInterval(async () => {
+        try {
+            const now = new Date().toISOString();
+            // Find all enabled ads across all channels
+            const ads = db.prepare(`
+                SELECT * FROM ad_schedule 
+                WHERE is_enabled = 1 
+                AND (last_sent IS NULL OR datetime(last_sent, '+' || interval_minutes || ' minutes') <= datetime('now'))
+            `).all() as any[];
+
+            for (const ad of ads) {
+                // Check if ads are enabled for this specific channel
+                const adsEnabled = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'ads_enabled'").get(ad.channel_id) as { value: string } | undefined;
+                if (adsEnabled?.value === 'false') continue;
+
+                console.log(`[Ad Scheduler] Posting ad to channel ${ad.channel_id}: ${ad.content.substring(0, 20)}...`);
+
+                try {
+                    const sendToken = getSendToken(ad.channel_id);
+                    if (sendToken) {
+                        await kickApi.sendChatMessage(ad.channel_id, ad.content, sendToken);
+                        db.prepare('UPDATE ad_schedule SET last_sent = ? WHERE id = ?').run(now, ad.id);
+                    }
+                } catch (err: any) {
+                    console.error(`[Ad Scheduler] Failed to send ad: ${err.message}`);
+                }
+            }
+        } catch (err) {
+            console.error('[Ad Scheduler] Error in loop:', err);
+        }
+    }, 60000); // Check every minute
+}
 
 function channel_id_matches_bot(channelId: string): boolean {
     const botId = db.prepare("SELECT value FROM settings WHERE channel_id = '__bot__' AND key = 'bot_broadcaster_id'").get() as { value: string } | undefined;

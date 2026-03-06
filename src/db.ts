@@ -81,9 +81,19 @@ export const initDb = () => {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             channel_id TEXT,
             user_id TEXT,
-            username TEXT,
-            message TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // 5. Ad Schedule - for timed promotional messages
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS ad_schedule (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id TEXT,
+            content TEXT,
+            interval_minutes INTEGER DEFAULT 30,
+            last_sent DATETIME,
+            is_enabled BOOLEAN DEFAULT 1
         )
     `);
 
