@@ -11,6 +11,7 @@ import * as kickApi from './kick_api';
 import crypto from 'crypto';
 import Pusher from 'pusher-js';
 import { startTrivia, checkTriviaAnswer } from './games';
+import { handleCommand, handleActivity } from './commands';
 import { generateSpeechBase64 } from './tts';
 
 // Load environment variables
@@ -541,9 +542,22 @@ app.post('/webhook/kick', async (req: any, res) => {
                 return;
             }
 
-            // 1. Save to Chat History for AI context
+            // 0.5 AUTO-MOD FILTER
+            const forbiddenWords = ['nigger', 'faggot', 'retard', 'tranny']; // Basic starter list for auto-mod
+            const lowerContent = content.toLowerCase();
+            if (forbiddenWords.some(word => lowerContent.includes(word))) {
+                console.log(`[AutoMod] Caught forbidden word from ${sender}`);
+                const sendToken = getSendToken(channelId);
+                if (sendToken) {
+                    await kickApi.sendChatMessage(channelId, `⚠️ @${sender} Please watch your language! That word is not allowed here.`, sendToken);
+                }
+                return; // Stop processing entirely
+            }
+
+            // 1. Save to Chat History and Track Activity (Points Points Points!)
             const insertChat = db.prepare('INSERT INTO chat_history (channel_id, user_id, username, message) VALUES (?, ?, ?, ?)');
             insertChat.run(channelId, senderId, sender, content);
+            handleActivity(channelId, sender, senderId);
 
             // 2. Broadcast raw message to Frontend overlay via WebSockets
             io.emit('chatMessage', { sender, content });
@@ -563,6 +577,11 @@ app.post('/webhook/kick', async (req: any, res) => {
 
             // 3. GAME ENGINE: Check for trivia answers or commands
             const sendToken = getSendToken(channelId);
+
+            // Chat Commands
+            const wasCommand = await handleCommand(channelId, sender, senderId, content, sendToken || '');
+            if (wasCommand) return; // Stop processing if the message was a standard chat command
+
             const gamesEnabled = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'games_enabled'").get(channelId) as { value: string } | undefined;
 
             if (gamesEnabled?.value !== 'false') {
@@ -576,7 +595,6 @@ app.post('/webhook/kick', async (req: any, res) => {
             }
 
             let shouldTrigger = false;
-            const lowerContent = content.toLowerCase();
             const isMentioned = lowerContent.includes('@geebot') || lowerContent.includes('geebot') || lowerContent.includes('@gee_bot') || lowerContent.includes('gee_bot') || lowerContent.includes('gee-bot');
 
             if (aiEnabledRow?.value !== 'false') {
