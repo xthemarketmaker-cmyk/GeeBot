@@ -229,7 +229,7 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
 
         if (shouldTrigger) {
             console.log(`[GeeBot Trigger] AI responding to ${sender} (Mode: ${aiMode}): "${content}"`);
-            const aiResponse = await generateChatResponse(sender, content);
+            const aiResponse = await generateChatResponse(sender, content, channelId);
             console.log(`[GeeBot AI Replying]: ${aiResponse}`);
 
             try {
@@ -683,7 +683,7 @@ app.post('/webhook/kick', async (req: any, res) => {
             }
 
             if (shouldTrigger) {
-                const aiResponse = await generateChatResponse(sender, content);
+                const aiResponse = await generateChatResponse(sender, content, channelId);
                 console.log(`[GeeBot AI Webhook Replying]: ${aiResponse}`);
 
                 try {
