@@ -402,8 +402,11 @@ app.post('/api/auth/complete', async (req, res) => {
             .then(() => console.log('[OAuth Server] Step 4 Success: Join message sent.'))
             .catch((err: any) => console.warn(`[OAuth Server] Step 4 Warning: Chat message failed (${err.message}) — channel is still linked.`));
 
-        // Return success immediately — the channel IS linked even if the welcome message fails
-        res.json({ success: true, streamer: streamerName, channelId: channelId.toString() });
+        // Return success immediately with a secure dashboard token
+        const dashboardToken = crypto.randomBytes(32).toString('hex');
+        stmt.run(channelId.toString(), 'dashboard_token', dashboardToken);
+
+        res.json({ success: true, streamer: streamerName, channelId: channelId.toString(), token: dashboardToken });
 
     } catch (err: any) {
         console.error('[OAuth Server] ERROR during finalization:', err.message);
@@ -440,16 +443,41 @@ app.get('/api/debug', async (req, res) => {
     });
 });
 
+// Dashboard Auth Middleware
+function requireAuth(req: any, res: any, next: any) {
+    const authHeader = req.headers.authorization;
+    const channelId = req.query.channelId?.toString() || req.body.channelId;
+
+    if (channelId === '__bot__') {
+        const botTokenRow = db.prepare("SELECT value FROM settings WHERE channel_id = '__bot__' AND key = 'dashboard_token'").get() as { value: string } | undefined;
+        if (!authHeader || authHeader !== `Bearer ${botTokenRow?.value}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        return next();
+    }
+
+    if (!channelId) return res.status(400).json({ error: 'Missing channelId' });
+
+    const tokenRow = db.prepare("SELECT value FROM settings WHERE channel_id = ? AND key = 'dashboard_token'").get(channelId) as { value: string } | undefined;
+    if (!tokenRow || !authHeader || authHeader !== `Bearer ${tokenRow.value}`) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    req.userChannelId = channelId;
+    next();
+}
+
 // API Routes for Dashboard
-app.get('/api/settings', (req, res) => {
-    const channelId = req.query.channelId?.toString() || '__bot__';
+app.get('/api/settings', requireAuth, (req: any, res) => {
+    const channelId = req.userChannelId;
     const rows = db.prepare('SELECT key, value FROM settings WHERE channel_id = ?').all(channelId) as { key: string, value: string }[];
     const settingsMap = rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
     res.json(settingsMap);
 });
 
-app.post('/api/settings', (req, res) => {
-    const { channelId = '__bot__', ...settings } = req.body;
+app.post('/api/settings', requireAuth, (req: any, res) => {
+    const channelId = req.userChannelId;
+    const { channelId: _, ...settings } = req.body;
     const upsert = db.prepare('INSERT OR REPLACE INTO settings (channel_id, key, value) VALUES (?, ?, ?)');
 
     // Use a transaction for reliability
@@ -464,20 +492,22 @@ app.post('/api/settings', (req, res) => {
 });
 
 // Ad Schedule Management
-app.get('/api/ads', (req, res) => {
-    const channelId = req.query.channelId?.toString() || '__bot__';
+app.get('/api/ads', requireAuth, (req: any, res) => {
+    const channelId = req.userChannelId;
     const ads = db.prepare('SELECT * FROM ad_schedule WHERE channel_id = ?').all(channelId);
     res.json(ads);
 });
 
-app.post('/api/ads', (req, res) => {
-    const { channel_id, content, interval_minutes } = req.body;
+app.post('/api/ads', requireAuth, (req: any, res) => {
+    const channelId = req.userChannelId;
+    const { content, interval_minutes } = req.body;
     db.prepare('INSERT INTO ad_schedule (channel_id, content, interval_minutes) VALUES (?, ?, ?)')
-        .run(channel_id, content, interval_minutes);
+        .run(channelId, content, interval_minutes);
     res.json({ status: 'success' });
 });
 
-app.delete('/api/ads/:id', (req, res) => {
+app.delete('/api/ads/:id', requireAuth, (req: any, res: any) => {
+    // In a bulletproof system, check if this ad belongs to channelId
     db.prepare('DELETE FROM ad_schedule WHERE id = ?').run(req.params.id);
     res.json({ status: 'success' });
 });

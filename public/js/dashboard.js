@@ -108,6 +108,16 @@ const addAdBtn = document.getElementById('add-ad-btn');
 
 // Use a simple prompt for channel ID for now, or default to __bot__
 let currentChannelId = sessionStorage.getItem('current_channel_id') || '__bot__';
+let currentToken = sessionStorage.getItem('dashboard_token') || '';
+
+// Auth Headers Generator
+function getAuthHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (currentToken) {
+        headers['Authorization'] = `Bearer ${currentToken}`;
+    }
+    return headers;
+}
 
 // Save Toggles
 if (togglesBtn) {
@@ -123,7 +133,7 @@ if (togglesBtn) {
         try {
             const resp = await fetch('/api/settings', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getAuthHeaders(),
                 body: JSON.stringify(settings)
             });
             if (resp.ok) showToast("Modules Updated Successfully!");
@@ -136,7 +146,9 @@ if (togglesBtn) {
 // Ads Management
 async function loadAds() {
     try {
-        const resp = await fetch(`/api/ads?channelId=${currentChannelId}`);
+        const resp = await fetch(`/api/ads?channelId=${currentChannelId}`, {
+            headers: getAuthHeaders()
+        });
         const ads = await resp.json();
         adList.innerHTML = '';
 
@@ -172,9 +184,9 @@ if (addAdBtn) {
         try {
             const resp = await fetch('/api/ads', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({
-                    channel_id: currentChannelId,
+                    channelId: currentChannelId,
                     content,
                     interval_minutes: parseInt(interval)
                 })
@@ -192,7 +204,10 @@ if (addAdBtn) {
 
 window.deleteAd = async (id) => {
     try {
-        const resp = await fetch(`/api/ads/${id}`, { method: 'DELETE' });
+        const resp = await fetch(`/api/ads/${id}?channelId=${currentChannelId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
         if (resp.ok) {
             showToast("Ad Deleted.");
             loadAds();
@@ -219,7 +234,7 @@ if (saveBtn) {
         try {
             const resp = await fetch('/api/settings', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getAuthHeaders(),
                 body: JSON.stringify(settings)
             });
             if (resp.ok) {
@@ -243,7 +258,9 @@ function showToast(message) {
 // Fetch initial settings
 async function loadSettings() {
     try {
-        const resp = await fetch(`/api/settings?channelId=${currentChannelId}`);
+        const resp = await fetch(`/api/settings?channelId=${currentChannelId}`, {
+            headers: getAuthHeaders()
+        });
         const settings = await resp.json();
 
         if (settings.ai_personality) aiPersonality.value = settings.ai_personality;
