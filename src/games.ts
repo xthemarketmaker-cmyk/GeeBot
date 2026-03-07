@@ -1,5 +1,13 @@
-import { openai } from './ai';
+import OpenAI from 'openai';
+import dotenv from 'dotenv';
 import db from './db';
+
+dotenv.config();
+
+const openai = new OpenAI({
+    apiKey: process.env.GROK_API_KEY || '',
+    baseURL: 'https://api.x.ai/v1'
+});
 import * as kickApi from './kick_api';
 
 interface ActiveTrivia {
