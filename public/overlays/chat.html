@@ -117,6 +117,14 @@
                 container.lastElementChild.remove();
             }
         });
+
+        // Listen for TTS Audio events from the bot
+        socket.on('ttsAudio', (data) => {
+            if (data.audio) {
+                const audio = new Audio(data.audio);
+                audio.play().catch(e => console.error("Audio playback failed:", e));
+            }
+        });
     </script>
 </body>
 

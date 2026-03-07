@@ -11,6 +11,7 @@ import * as kickApi from './kick_api';
 import crypto from 'crypto';
 import Pusher from 'pusher-js';
 import { startTrivia, checkTriviaAnswer } from './games';
+import { generateSpeechBase64 } from './tts';
 
 // Load environment variables
 dotenv.config();
@@ -226,6 +227,14 @@ function subscribeToKickChat(chatroomId: string, channelId: string, streamerName
 
             // Also emit the bot's response to the overlay
             io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse });
+
+            // Generate and emit TTS audio
+            console.log(`[GeeBot TTS] Generating voice audio...`);
+            const audioData = await generateSpeechBase64(aiResponse);
+            if (audioData) {
+                console.log(`[GeeBot TTS] Broadcasting audio to overlays!`);
+                io.emit('ttsAudio', { sender: 'Gee_Bot', content: aiResponse, audio: audioData });
+            }
         }
     });
 
@@ -562,6 +571,14 @@ app.post('/webhook/kick', async (req: any, res) => {
                 }
 
                 io.emit('chatMessage', { sender: 'Gee_Bot', content: aiResponse });
+
+                // Generate and emit TTS audio
+                console.log(`[GeeBot TTS] Generating voice audio...`);
+                const audioData = await generateSpeechBase64(aiResponse);
+                if (audioData) {
+                    console.log(`[GeeBot TTS] Broadcasting audio to overlays!`);
+                    io.emit('ttsAudio', { sender: 'Gee_Bot', content: aiResponse, audio: audioData });
+                }
             }
         }
     } catch (error) {
