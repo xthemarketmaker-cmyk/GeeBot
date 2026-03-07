@@ -75,6 +75,19 @@ app.use(express.static(path.join(__dirname, '..', 'public'))); // Serve dashboar
 
 const PORT = process.env.PORT || 3000;
 
+/**
+ * Determines the base URL for the application, useful for callbacks.
+ */
+function getAppBaseUrl(): string {
+    if (process.env.NODE_ENV === 'production' && process.env.VERCEL_URL) {
+        return `https://${process.env.VERCEL_URL}`;
+    }
+    return `http://localhost:${process.env.PORT || 3000}`; // Fallback to localhost during dev
+}
+
+// In-Memory state for live Polls per channel
+const activePolls = new Map<string, { question: string, options: string[], votes: number[], total: number, votedUsers: Set<string> }>();
+
 // The Kick slug of the bot account itself (e.g. kick.com/gee-bot).
 // When this account does the OAuth flow, we store its token as the global bot token.
 const BOT_KICK_SLUG = (process.env.BOT_KICK_SLUG || 'gee-bot').toLowerCase();
@@ -577,6 +590,68 @@ app.post('/webhook/kick', async (req: any, res) => {
 
             // 3. GAME ENGINE: Check for trivia answers or commands
             const sendToken = getSendToken(channelId);
+
+            // -- OBS Widget Logic: Polls & Alerts --
+            const args = content.split(' ');
+            const cmd = args[0].toLowerCase();
+
+            if (cmd === '!testalert') {
+                console.log(`[GeeBot Widgets] Sending test alert to channel ${channelId}`);
+                io.emit('streamAlert', { type: 'test', username: sender });
+                await kickApi.sendChatMessage(channelId, `@${sender} sent a test alert to the overlay!`, sendToken);
+                return;
+            }
+
+            if (cmd === '!poll') {
+                // Usage: !poll "Question?" "Option 1" "Option 2"
+                const parts = content.match(/(".*?"|[^"\s]+)+(?=\s*|\s*$)/g) || [];
+                if (parts.length >= 3) {
+                    const question = parts[1].replace(/"/g, '');
+                    const options = parts.slice(2).map((p: string) => p.replace(/"/g, ''));
+
+                    activePolls.set(channelId, {
+                        question,
+                        options,
+                        votes: new Array(options.length).fill(0),
+                        total: 0,
+                        votedUsers: new Set()
+                    });
+
+                    io.emit('pollStart', { question, options, channelId });
+                    await kickApi.sendChatMessage(channelId, `📊 Poll Started: ${question} Type !vote 1, !vote 2, etc.`, sendToken);
+
+                    // Auto-end poll after 60 seconds
+                    setTimeout(() => {
+                        const poll = activePolls.get(channelId);
+                        if (poll) {
+                            let maxVotes = -1;
+                            let winnerIdx = -1;
+                            poll.votes.forEach((v, idx) => {
+                                if (v > maxVotes) { maxVotes = v; winnerIdx = idx; }
+                            });
+                            const winner = maxVotes > 0 ? poll.options[winnerIdx] : null;
+                            io.emit('pollEnd', { winner, channelId });
+                            activePolls.delete(channelId);
+                            kickApi.sendChatMessage(channelId, winner ? `📊 Poll Ended! Winner: ${winner}` : `📊 Poll Ended! No votes cast.`, sendToken);
+                        }
+                    }, 60000);
+                    return;
+                }
+            }
+
+            if (cmd === '!vote') {
+                const poll = activePolls.get(channelId);
+                if (poll && !poll.votedUsers.has(senderId)) {
+                    const optionNum = parseInt(args[1]);
+                    if (!isNaN(optionNum) && optionNum >= 1 && optionNum <= poll.options.length) {
+                        poll.votes[optionNum - 1]++;
+                        poll.total++;
+                        poll.votedUsers.add(senderId);
+                        io.emit('pollUpdate', { votes: poll.votes, total: poll.total, channelId });
+                        return; // Voted successfully
+                    }
+                }
+            }
 
             // Chat Commands
             const wasCommand = await handleCommand(channelId, sender, senderId, content, sendToken || '');

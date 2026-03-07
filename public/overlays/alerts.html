@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>GeeBot Alerts Overlay</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: transparent;
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #alert-box {
+            text-align: center;
+            display: none;
+            position: relative;
+        }
+
+        .alert-image {
+            max-width: 250px;
+            animation: bounceIn 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .alert-text {
+            background: linear-gradient(90deg, #53fc18, #0cf2d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 3rem;
+            font-weight: 900;
+            margin-top: -20px;
+            text-shadow: 0px 5px 15px rgba(0, 0, 0, 0.5);
+            animation: slideUpFade 0.8s ease-out 0.2s both;
+        }
+
+        .alert-subtext {
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            text-shadow: 0px 2px 10px rgba(0, 0, 0, 0.8);
+            animation: slideUpFade 0.8s ease-out 0.4s both;
+        }
+
+        @keyframes bounceIn {
+            0% {
+                transform: scale(0);
+                opacity: 0;
+            }
+
+            60% {
+                transform: scale(1.1);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideUpFade {
+            0% {
+                transform: translateY(30px);
+                opacity: 0;
+            }
+
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .exit-anim {
+            animation: zoomOut 0.5s ease-in forwards !important;
+        }
+
+        @keyframes zoomOut {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(0);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="alert-box">
+        <!-- A default 3D spinning box or star GIF you can link here -->
+        <img src="https://media.giphy.com/media/l41JRsph73VokN6ik/giphy.gif" class="alert-image" id="alert-img"
+            alt="Alert">
+        <div class="alert-text" id="alert-main">NEW FOLLOWER!</div>
+        <div class="alert-subtext" id="alert-sub">Welcome @Username</div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const alertBox = document.getElementById('alert-box');
+        const alertMain = document.getElementById('alert-main');
+        const alertSub = document.getElementById('alert-sub');
+        const alertImg = document.getElementById('alert-img');
+
+        const queue = [];
+        let isPlaying = false;
+
+        socket.on('streamAlert', (data) => {
+            // data: { type: 'follow'|'sub'|'gift', username: string, amount?: string, message?: string }
+            queue.push(data);
+            processQueue();
+        });
+
+        function processQueue() {
+            if (isPlaying || queue.length === 0) return;
+            isPlaying = true;
+
+            const current = queue.shift();
+
+            // Remove exit animation if exists
+            alertBox.classList.remove('exit-anim');
+
+            // Customize per event type
+            if (current.type === 'follow') {
+                alertMain.textContent = "NEW STREAM FOLLOWER!";
+                alertSub.textContent = `Welcome ${current.username}!`;
+                alertImg.src = "https://media.giphy.com/media/l41JRsph73VokN6ik/giphy.gif"; // generic hype gif
+            } else if (current.type === 'sub') {
+                alertMain.textContent = "NEW SUBSCRIBER!";
+                alertSub.textContent = `Thank you ${current.username}!`;
+                alertImg.src = "https://media.giphy.com/media/26AHONQ79FdWZhAI0/giphy.gif"; // money gif
+            } else if (current.type === 'test') {
+                alertMain.textContent = "TEST ALERT!";
+                alertSub.textContent = `Widgets are working!`;
+            }
+
+            // Force reflow for animations
+            void alertBox.offsetWidth;
+
+            alertBox.style.display = 'block';
+
+            // Play audio snippet if desired
+            // const audio = new Audio('/sounds/alert.mp3');
+            // audio.play();
+
+            setTimeout(() => {
+                alertBox.classList.add('exit-anim');
+                setTimeout(() => {
+                    alertBox.style.display = 'none';
+                    isPlaying = false;
+                    processQueue();
+                }, 500); // Wait for exit anim
+            }, 5000); // Show alert for 5 seconds
+        }
+    </script>
+</body>
+
+</html>

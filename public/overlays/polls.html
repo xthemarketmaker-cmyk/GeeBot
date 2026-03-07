@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>GeeBot Poll Overlay</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: 'Inter', sans-serif;
+            background: transparent;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #poll-container {
+            background: rgba(15, 15, 15, 0.9);
+            border: 2px solid #53fc18;
+            border-radius: 12px;
+            padding: 24px;
+            width: 400px;
+            box-shadow: 0 10px 30px rgba(83, 252, 24, 0.2);
+            color: white;
+            display: none;
+            backdrop-filter: blur(10px);
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .poll-question {
+            font-size: 1.5rem;
+            font-weight: 900;
+            margin-bottom: 20px;
+            text-align: center;
+            color: #fff;
+        }
+
+        .poll-option {
+            margin-bottom: 15px;
+            position: relative;
+        }
+
+        .option-label {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 700;
+            margin-bottom: 8px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .bar-bg {
+            background: rgba(255, 255, 255, 0.1);
+            height: 24px;
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .bar-fill {
+            background: #53fc18;
+            height: 100%;
+            width: 0%;
+            transition: width 0.4s ease-out;
+        }
+
+        .total-votes {
+            text-align: center;
+            font-size: 0.9rem;
+            color: #aaa;
+            margin-top: 15px;
+            font-weight: 700;
+        }
+
+        @keyframes popIn {
+            0% {
+                transform: scale(0.8);
+                opacity: 0;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .fade-out {
+            animation: popOut 0.5s forwards;
+        }
+
+        @keyframes popOut {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(0.8);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="poll-container">
+        <div class="poll-question" id="question">What should we play next?</div>
+        <div id="options-list"></div>
+        <div class="total-votes" id="total-text">0 Total Votes</div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const container = document.getElementById('poll-container');
+        const questionEl = document.getElementById('question');
+        const optionsList = document.getElementById('options-list');
+        const totalText = document.getElementById('total-text');
+
+        let currentTotal = 0;
+
+        socket.on('pollStart', (data) => {
+            // data: { question: string, options: string[], channelId: string }
+            questionEl.textContent = data.question;
+            optionsList.innerHTML = '';
+            currentTotal = 0;
+            totalText.textContent = `0 Total Votes`;
+
+            data.options.forEach((opt, index) => {
+                const num = index + 1;
+                const optDiv = document.createElement('div');
+                optDiv.className = 'poll-option';
+                optDiv.id = `opt-${num}`;
+                optDiv.innerHTML = `
+                    <div class="option-label">
+                        <span>!vote ${num} - ${opt}</span>
+                        <span id="pct-${num}">0%</span>
+                    </div>
+                    <div class="bar-bg">
+                        <div class="bar-fill" id="fill-${num}"></div>
+                    </div>
+                `;
+                // custom attribute to store votes
+                optDiv.dataset.votes = 0;
+                optionsList.appendChild(optDiv);
+            });
+
+            container.classList.remove('fade-out');
+            container.style.display = 'block';
+        });
+
+        socket.on('pollUpdate', (data) => {
+            // data: { optionIndex: number, votes: number[], total: number }
+            currentTotal = data.total;
+            totalText.textContent = `${currentTotal} Total Votes`;
+
+            data.votes.forEach((votesCount, idx) => {
+                const num = idx + 1;
+                const pct = currentTotal === 0 ? 0 : Math.round((votesCount / currentTotal) * 100);
+
+                const pctEl = document.getElementById(`pct-${num}`);
+                const fillEl = document.getElementById(`fill-${num}`);
+
+                if (pctEl) pctEl.textContent = `${pct}%`;
+                if (fillEl) fillEl.style.width = `${pct}%`;
+            });
+        });
+
+        socket.on('pollEnd', (data) => {
+            if (data.winner) {
+                questionEl.textContent = `Winner: ${data.winner}!`;
+            } else {
+                questionEl.textContent = `Poll Closed!`;
+            }
+            setTimeout(() => {
+                container.classList.add('fade-out');
+                setTimeout(() => { container.style.display = 'none'; }, 500);
+            }, 6000); // show winner for 6 seconds
+        });
+    </script>
+</body>
+
+</html>
