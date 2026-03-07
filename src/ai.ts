@@ -1,13 +1,10 @@
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import db from './db';
 
 dotenv.config();
-
-export const openai = new OpenAI({
-    apiKey: process.env.GROK_API_KEY || '',
-    baseURL: 'https://api.x.ai/v1' // xAI (Grok) API compatibility layer
-});
 
 const SYSTEM_PROMPT = `You are GeeBot, an integrated chat personality and moderator for this Kick channel.
 Role: You are a regular chatter and homie in the stream, not a robotic "AI assistant".
@@ -19,22 +16,27 @@ Rules:
 4. Keep it concise. One or two sentences max. Punchy and fast.
 5. If someone asks a dumb question, troll them gently. If they ask a real question, give a real but casual answer.`;
 
-export async function generateChatResponse(username: string, message: string): Promise<string> {
+export async function generateChatResponse(username: string, message: string, channelId?: string): Promise<string> {
     try {
-        if (!process.env.GROK_API_KEY || process.env.GROK_API_KEY === 'your_grok_api_key_here') {
-            return `[GeeBot AI Offline] Hello ${username}! The streamer hasn't configured my Grok AI "brain" yet!`;
+        // Fetch Provider & Key Settings
+        let provider = 'grok';
+        let customKey = '';
+        let customPersonality = '';
+
+        if (channelId) {
+            const getSetting = (key: string) => {
+                const row = db.prepare('SELECT value FROM settings WHERE channel_id = ? AND key = ?').get(channelId, key) as { value: string } | undefined;
+                return row?.value || '';
+            };
+            provider = getSetting('ai_provider') || 'grok';
+            customKey = getSetting('ai_custom_key') || '';
+            customPersonality = getSetting('ai_personality') || '';
         }
 
-        // Fetch custom personality from settings
-        const settingsStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
-        const customPersonality = settingsStmt.get('ai_personality') as { value: string } | undefined;
-        let systemPrompt = customPersonality?.value || SYSTEM_PROMPT;
-
-        // Dynamically inject the current date into the prompt as background knowledge
+        let systemPrompt = customPersonality || SYSTEM_PROMPT;
         const currentDate = new Date().toISOString().split('T')[0];
         const currentYear = new Date().getFullYear();
 
-        // Refined system instructions for natural conversation
         systemPrompt += `\n\nBACKGROUND KNOWLEDGE:
 - Current Year: ${currentYear}
 - Today's Date: ${currentDate}
@@ -43,36 +45,104 @@ export async function generateChatResponse(username: string, message: string): P
 - DO NOT use generic greetings for every message. Just reply directly to what they said.
 - MAXIMUM LENGTH: 200 characters.`;
 
-        // Fetch recent context for the AI from the database.
-        const recentMessagesStmt = db.prepare('SELECT username, message FROM chat_history ORDER BY id DESC LIMIT 10');
-        const recentMessages = recentMessagesStmt.all() as { username: string, message: string }[];
+        // Fetch Recent Context
+        let recentMessages: { username: string, message: string }[] = [];
+        if (channelId) {
+            const stmt = db.prepare('SELECT username, message FROM chat_history WHERE channel_id = ? ORDER BY id DESC LIMIT 10');
+            recentMessages = stmt.all(channelId) as { username: string, message: string }[];
+        }
 
-        // Format history for OpenAI
-        const contextMessages: any[] = recentMessages.reverse().map(msg => ({
-            role: 'user', // We treat all chat messages as user inputs context
+        // Format historical context for standard OpenAI-compatible endpoints
+        const oaiMessages: any[] = recentMessages.reverse().map(msg => ({
+            role: 'user', // Treat chat history as purely user context to avoid hallucinating Assistant replies
             content: `${msg.username}: ${msg.message}`
         }));
 
-        console.log(`[Grok AI] Requesting response for ${username}...`);
-        console.log(`[Grok AI] Context messges: ${contextMessages.length}`);
+        console.log(`[AI Brain] Routing request to provider: ${provider.toUpperCase()}`);
+
+        // --- DYNAMIC AI ROUTING ENGINE ---
+
+        // 1. ANTHROPIC CLAUDE
+        if (provider === 'claude') {
+            const apiKey = customKey || process.env.ANTHROPIC_API_KEY;
+            if (!apiKey) return `[GeeBot AI Offline] The Claude API key is missing!`;
+
+            const anthropic = new Anthropic({ apiKey });
+            // Claude uses 'user'/'assistant' arrays, mapping all history to a single user block for now
+            const claudeHistory = oaiMessages.map(m => m.content).join('\n');
+            const finalMessage = `[Recent Chat Context]\n${claudeHistory}\n\n[Current User Message]\n${username} explicitly asks: ${message}`;
+
+            const response = await anthropic.messages.create({
+                model: 'claude-3-7-sonnet-20250219',
+                max_tokens: 200,
+                system: systemPrompt,
+                messages: [{ role: 'user', content: finalMessage }],
+                temperature: 0.7
+            });
+            // Extract the text block if it exists
+            const textBlock = response.content.find((block: any) => block.type === 'text');
+            return textBlock && 'text' in textBlock ? textBlock.text : 'Error generating response from Claude.';
+        }
+
+        // 2. GOOGLE GEMINI
+        if (provider === 'gemini') {
+            const apiKey = customKey || process.env.GEMINI_API_KEY;
+            if (!apiKey) return `[GeeBot AI Offline] The Gemini API key is missing!`;
+
+            const ai = new GoogleGenAI({ apiKey });
+            const geminiHistory = oaiMessages.map(m => m.content).join('\n');
+            const finalMessage = `[Recent Context]\n${geminiHistory}\n\nUser ${username}: ${message}`;
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-pro',
+                contents: finalMessage,
+                config: {
+                    systemInstruction: systemPrompt,
+                    temperature: 0.7,
+                    maxOutputTokens: 200
+                }
+            });
+            return response.text || 'Error generating response from Gemini.';
+        }
+
+        // 3. OPENAI / GROK / DEEPSEEK (REST Compatible)
+        let baseURL: string | undefined = undefined;
+        let apiKey = '';
+        let model = '';
+
+        if (provider === 'grok') {
+            baseURL = 'https://api.x.ai/v1';
+            apiKey = customKey || process.env.GROK_API_KEY || '';
+            model = 'grok-3';
+        } else if (provider === 'deepseek') {
+            baseURL = 'https://api.deepseek.com';
+            apiKey = customKey || process.env.DEEPSEEK_API_KEY || '';
+            model = 'deepseek-chat';
+        } else {
+            // Default OpenAI
+            apiKey = customKey || process.env.OPENAI_API_KEY || '';
+            model = 'gpt-4o';
+        }
+
+        if (!apiKey) return `[GeeBot AI Offline] The ${provider.toUpperCase()} API key is missing!`;
+
+        const openai = new OpenAI({ apiKey, baseURL });
 
         const response = await openai.chat.completions.create({
-            model: 'grok-3', // Using grok-3 which was verified to work with this API key
+            model: model,
             messages: [
                 { role: 'system', content: systemPrompt },
-                ...contextMessages,
+                ...oaiMessages,
                 { role: 'user', content: `${username} explicitly asks: ${message}` }
             ],
-            max_tokens: 200, // Slightly more tokens for better replies
+            max_tokens: 200,
             temperature: 0.7
         });
-
-        console.log(`[Grok AI] Success: ${response.choices[0]?.message?.content?.substring(0, 30)}...`);
 
         return response.choices[0]?.message?.content || 'Beep boop, my brain had a slight glitch.';
 
     } catch (error) {
-        console.error('Error in AI Chat Module:', error);
-        return `Oops, my circuits are a bit fried right now.`;
+        console.error(`[AI Engine Error]:`, error);
+        return `Oops, my circuits are a bit fried right now. Check your Dashboard AI settings.`;
     }
 }

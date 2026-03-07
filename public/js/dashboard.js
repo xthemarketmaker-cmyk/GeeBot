@@ -220,6 +220,8 @@ window.deleteAd = async (id) => {
 // UI Actions - Main Settings
 const aiPersonality = document.getElementById('ai-personality');
 const aiProbability = document.getElementById('ai-probability');
+const aiProvider = document.getElementById('ai-provider');
+const aiCustomKey = document.getElementById('ai-custom-key');
 const toast = document.getElementById('toast');
 const saveBtn = document.getElementById('save-ai-settings');
 
@@ -228,7 +230,9 @@ if (saveBtn) {
         const settings = {
             channelId: currentChannelId,
             ai_personality: aiPersonality.value,
-            ai_probability: aiProbability.value
+            ai_probability: aiProbability.value,
+            ai_provider: aiProvider ? aiProvider.value : 'openai',
+            ai_custom_key: aiCustomKey ? aiCustomKey.value : ''
         };
 
         try {
@@ -265,6 +269,8 @@ async function loadSettings() {
 
         if (settings.ai_personality) aiPersonality.value = settings.ai_personality;
         if (settings.ai_probability) aiProbability.value = settings.ai_probability;
+        if (settings.ai_provider && aiProvider) aiProvider.value = settings.ai_provider;
+        if (settings.ai_custom_key && aiCustomKey) aiCustomKey.value = settings.ai_custom_key;
         if (settings.bot_enabled) botToggle.checked = settings.bot_enabled === 'true';
         if (settings.ai_enabled) aiToggle.checked = settings.ai_enabled === 'true';
         if (settings.games_enabled) gamesToggle.checked = settings.games_enabled === 'true';
